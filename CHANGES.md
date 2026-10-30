@@ -159,7 +159,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ---
 
 ### [C-03] `auth`
-- **Estado**: `[x]` completado 2026-10-30 (pendiente de archivar)
+- **Estado**: `[x]` completado (archivado 2026-10-30)
 - **Scope**: Autenticación JWT en cookie HttpOnly + autorización RBAC + cambio obligatorio de contraseña
   - `app/core/security.py`: bcrypt (`to_thread` + semáforo, hash **antes** de abrir la transacción, ≤72 bytes) + JWT PyJWT (`sub`, `iat` sin truncar, `exp`, roles vigentes; firmado con `SECRET_KEY`)
   - `POST /auth/registro` — 201 con usuario + rol CLIENTE + ficha cliente en **un solo UoW**; email/documento duplicado → 409; `extra="forbid"` (US-003, RN-02)
