@@ -204,7 +204,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ---
 
 ### [C-05] `repuestos-stock`
-- **Estado**: [ ] pendiente
+- **Estado**: `[x]` completado (archivado 2026-10-30)
 - **Scope**: Catálogo de repuestos con stock por movimientos e historial de precios
   - Modelos: `Repuesto` (precio NUMERIC(10,2) CHECK > 0, stock CHECK >= 0, `borrado_en`), `MovimientoStock`, `HistorialPrecioRepuesto` (CHECK `precio_nuevo > precio_anterior`)
   - **Índice único parcial** `(codigo) WHERE borrado_en IS NULL`

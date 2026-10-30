@@ -22,6 +22,7 @@ from app.core.config import cargar_settings
 # que agregue modelos suma su import acá.
 from app.modules.usuarios import models as _modelos_usuarios  # noqa: F401
 from app.modules.clientes import models as _modelos_clientes  # noqa: F401
+from app.modules.repuestos import models as _modelos_repuestos  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
