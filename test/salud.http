@@ -1,0 +1,16 @@
+### Salud del servicio — C-01 (spec service-health)
+# Levantar el server primero:  uvicorn main:app --port 8000
+# Casos y respuesta esperada:
+#   - Con PostgreSQL arriba:      1) 200   2) 200
+#   - Con PostgreSQL caído:       1) 200 (sigue vivo)   2) 503 (no listo)
+# Rest Client de VS Code: cada bloque ### se envía por separado.
+
+### 1) Liveness — esperado: 200 {"estado": "vivo"} (no toca la base)
+GET http://localhost:8000/health/live
+
+### 2) Readiness con PostgreSQL arriba — esperado: 200 {"estado": "listo"}
+GET http://localhost:8000/health/ready
+
+### 3) Readiness con PostgreSQL caído — esperado: 503 {"estado": "no listo"}
+# El proceso sigue vivo: mientras tanto /health/live sigue en 200.
+GET http://localhost:8000/health/ready

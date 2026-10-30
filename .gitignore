@@ -1,0 +1,11 @@
+# Secretos y entorno local — nunca versionar (regla dura: solo entorno, ver AGENTS.md)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Artefactos de la suite
+.pytest_cache/

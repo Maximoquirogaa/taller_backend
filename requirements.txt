@@ -1,0 +1,15 @@
+# Stack congelado del proyecto (AGENTS.md / knowledge-base/02 §Stack)
+# Python 3.12+ · driver asincrónico asyncpg (P-01 resuelta)
+fastapi[standard]>=0.111
+sqlmodel>=0.0.24
+sqlalchemy[asyncio]>=2.0
+asyncpg>=0.30
+alembic>=1.13
+pydantic-settings>=2.0
+bcrypt>=4.0
+PyJWT>=2.8
+
+# ── Dependencias de DESARROLLO (no hacen falta para correr la API) ──────────
+# Suite del núcleo contra PostgreSQL real (D9); ver test/conftest.py.
+pytest>=8.0
+pytest-asyncio>=0.24

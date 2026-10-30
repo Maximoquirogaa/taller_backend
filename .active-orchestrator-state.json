@@ -1,0 +1,154 @@
+{
+  "version": 4,
+  "step": "done",
+  "owner": "active-orchestrator",
+  "discovery": {
+    "skipped": true
+  },
+  "kb": {
+    "created_by": "kb-creator",
+    "source": "ingest",
+    "discovery": {
+      "problem": "API REST asincrónica para gestionar un taller mecánico: órdenes de trabajo, stock de repuestos, clientes/vehículos y acceso por roles",
+      "system_type": "api",
+      "domain": "automotive_repair",
+      "scale": "team",
+      "stack": "Python 3.12 + FastAPI + SQLModel + SQLAlchemy 2 async + asyncpg + PostgreSQL 16 + Alembic + pydantic-settings + bcrypt + PyJWT",
+      "needs_infra": true
+    },
+    "files": [
+      "knowledge-base/01_vision_y_objetivos.md",
+      "knowledge-base/02_descripcion_general.md",
+      "knowledge-base/03_actores_y_roles.md",
+      "knowledge-base/04_modelo_de_datos.md",
+      "knowledge-base/05_reglas_de_negocio.md",
+      "knowledge-base/06_funcionalidades.md",
+      "knowledge-base/07_flujos_principales.md",
+      "knowledge-base/08_arquitectura_propuesta.md",
+      "knowledge-base/09_decisiones_y_supuestos.md",
+      "knowledge-base/10_preguntas_abiertas.md",
+      "knowledge-base/11_evidencias_c14_c15.md",
+      "knowledge-base/README.md"
+    ]
+  },
+  "roadmap": {
+    "created_by": "roadmap-generator",
+    "source": "CHANGES.md",
+    "changes_file": "CHANGES.md",
+    "changes": [
+      "C-01",
+      "C-02",
+      "C-03",
+      "C-04",
+      "C-05",
+      "C-06",
+      "C-07",
+      "C-08",
+      "C-09",
+      "C-10",
+      "C-11"
+    ]
+  },
+  "skills": {
+    "created_by": "find-skill",
+    "recommended": [
+      {
+        "name": "fastapi",
+        "repo": "fastapi/fastapi@fastapi",
+        "installs": "13.2K",
+        "why": "Official FastAPI skill from the FastAPI organization — exact framework match for the async REST API"
+      },
+      {
+        "name": "fastapi-templates",
+        "repo": "wshobson/agents@fastapi-templates",
+        "installs": "25.8K",
+        "why": "Most popular FastAPI skill; project templates and scaffolding patterns for structuring the service"
+      },
+      {
+        "name": "fastapi-python",
+        "repo": "mindrally/skills@fastapi-python",
+        "installs": "13.8K",
+        "why": "FastAPI + Python backend guidance aligned with modern Python 3.12 practices"
+      },
+      {
+        "name": "fastapi-patterns",
+        "repo": "affaan-m/ecc@fastapi-patterns",
+        "installs": "7.2K",
+        "why": "Production FastAPI patterns (routing, dependency injection, settings) applicable to the workshop API"
+      },
+      {
+        "name": "fastapi-expert",
+        "repo": "jeffallan/claude-skills@fastapi-expert",
+        "installs": "6.1K",
+        "why": "Appears in both FastAPI and SQLAlchemy searches — covers FastAPI + SQLAlchemy 2 async integration"
+      },
+      {
+        "name": "backend-development",
+        "repo": "mrgoonie/claudekit-skills@backend-development",
+        "installs": "2.3K",
+        "why": "General backend architecture and API development practices for a team-scale service"
+      },
+      {
+        "name": "python-backend",
+        "repo": "jiatastic/open-python-skills@python-backend",
+        "installs": "2.2K",
+        "why": "Python-specific backend patterns for services, data layers, and project structure"
+      },
+      {
+        "name": "sqlalchemy-alembic-expert-best-practices-code-review",
+        "repo": "wispbit-ai/skills@sqlalchemy-alembic-expert-best-practices-code-review",
+        "installs": "2K",
+        "why": "SQLAlchemy 2 + Alembic best practices and code review — covers the ORM layer and migrations"
+      },
+      {
+        "name": "fastapi-async-patterns",
+        "repo": "thebushidocollective/han@fastapi-async-patterns",
+        "installs": "951",
+        "why": "Async FastAPI patterns — matches the asyncpg/SQLAlchemy 2 async stack (below 1K installs, mild caution)"
+      },
+      {
+        "name": "sqlalchemy-postgres",
+        "repo": "cfircoo/claude-code-toolkit@sqlalchemy-postgres",
+        "installs": "497",
+        "why": "SQLAlchemy + PostgreSQL pairing — matches the asyncpg/PostgreSQL 16 data layer (below 1K, mild caution)"
+      },
+      {
+        "name": "sqlmodel",
+        "repo": "fastapi/sqlmodel@sqlmodel",
+        "installs": "148",
+        "why": "Official SQLModel skill from the fastapi org — exact ORM match despite modest install count (official source)"
+      }
+    ],
+    "installed": [
+      { "name": "fastapi", "repo": "fastapi/fastapi@fastapi", "path": "~/.agents/skills/fastapi" },
+      { "name": "fastapi-python", "repo": "mindrally/skills@fastapi-python", "path": "~/.agents/skills/fastapi-python" },
+      { "name": "fastapi-templates", "repo": "wshobson/agents@fastapi-templates", "path": "~/.agents/skills/fastapi-templates" },
+      { "name": "python-backend", "repo": "jiatastic/open-python-skills@python-backend", "path": "~/.agents/skills/python-backend" },
+      { "name": "backend-development", "repo": "mrgoonie/claudekit-skills@backend-development", "path": "~/.agents/skills/backend-development" },
+      { "name": "sqlalchemy-alembic-expert-best-practices-code-review", "repo": "wispbit-ai/skills@sqlalchemy-alembic-expert-best-practices-code-review", "path": "~/.agents/skills/sqlalchemy-alembic-expert-best-practices-code-review" },
+      { "name": "sqlalchemy-postgres", "repo": "cfircoo/claude-code-toolkit@sqlalchemy-postgres", "path": "~/.agents/skills/sqlalchemy-postgres" },
+      { "name": "sqlmodel", "repo": "fastapi/sqlmodel@sqlmodel", "path": "~/.agents/skills/sqlmodel" }
+    ]
+  },
+  "registry": {
+    "created_by": "skill-registry",
+    "file": ".atl/skill-registry.md"
+  },
+  "agents": {
+    "created_by": "agent-instruction",
+    "files": ["CLAUDE.md", "AGENTS.md"],
+    "reglas_applied": [
+      "esquema_solo_alembic",
+      "uow_transacciones",
+      "bcrypt_asincronico",
+      "token_solo_cookie",
+      "stock_solo_movimientos",
+      "tablas_append_only",
+      "errores_sin_filtrar_base",
+      "roles_en_la_base",
+      "sin_lazy_loading",
+      "secretos_solo_entorno",
+      "contratos_estrictos"
+    ]
+  }
+}
