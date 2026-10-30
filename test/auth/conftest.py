@@ -1,4 +1,4 @@
-﻿"""Fixtures de integración para el grupo de rutas `/auth` (tarea 8).
+"""Fixtures de integración para el grupo de rutas `/auth` (tarea 8).
 
 - La API de pruebas corre **sobre `taller_test`**: antes de importar `main`, se
   fija `POSTGRES_DB` en el entorno (prioridad sobre `.env`), como ya hace el
@@ -28,6 +28,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine  # noqa: E402
 from main import app as aplicacion  # noqa: E402
 
 TABLAS_DE_ACCESO = (
+    "vehiculo",
+    "cliente",
     "asignacion_rol",
     "intento_acceso",
     "evento_seguridad",

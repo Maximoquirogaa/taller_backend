@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, NoReturn
+from typing import Annotated, NoReturn, Sequence
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -118,30 +118,39 @@ async def usuario_actual(
     return identidad
 
 
-def requiere_rol(rol: str):
-    """Dependencia de RBAC: exige el rol **vigente en la base** en cada petición (RN-04).
+def requiere_rol(*roles: str | Sequence[str]):
+    """Dependencia de RBAC: exige el rol (o al menos uno de ellos) **vigente en la base** en cada petición (RN-04).
 
     Args:
-        rol: rol del catálogo (`ADMIN`, `RECEPCION`, `MECANICO`, `CLIENTE`).
+        roles: rol o roles del catálogo (`ADMIN`, `RECEPCION`, `MECANICO`, `CLIENTE`).
 
     Returns:
-        La dependencia a montar (como `Depends(requiere_rol("ADMIN"))`).
+        La dependencia a montar (como `Depends(requiere_rol("ADMIN"))` o `Depends(requiere_rol("RECEPCION", "ADMIN"))`).
 
     Raises:
-        TypeError: si `rol` no es `str` (fail-fast de la fábrica).
+        TypeError: si ningún rol es válido o si un elemento no es `str` (fail-fast de la fábrica).
         HTTPException(401): si la sesión no es válida (por `usuario_actual`).
-        HTTPException(403): si el rol no está vigente para el usuario: la
+        HTTPException(403): si ninguno de los roles está vigente para el usuario: la
             revocación de roles alcanza a la sesión abierta sin esperar al
             vencimiento del token.
     """
-    if not isinstance(rol, str) or rol == "":
+    roles_efectivos: list[str] = []
+    for r in roles:
+        if isinstance(r, (list, tuple, set)):
+            roles_efectivos.extend(r)
+        elif isinstance(r, str):
+            roles_efectivos.append(r)
+        else:
+            raise TypeError("El rol requerido debe ser una cadena de texto no vacía")
+
+    if not roles_efectivos or any(not isinstance(r, str) or r == "" for r in roles_efectivos):
         raise TypeError("El rol requerido debe ser una cadena de texto no vacía")
 
     async def _comprobar(
         usuario: Annotated[UsuarioAutenticado, Depends(usuario_actual)],
     ) -> UsuarioAutenticado:
         """Dependencia real: valida rol vigente o dispara 403 con mensaje propio."""
-        if rol not in usuario.roles_vigentes:
+        if not any(r in usuario.roles_vigentes for r in roles_efectivos):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=MENSAJE_SIN_PERMISO,

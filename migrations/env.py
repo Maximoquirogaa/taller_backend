@@ -21,6 +21,7 @@ from app.core.config import cargar_settings
 # Importar el módulo registra sus tablas en `SQLModel.metadata` (D6). Cada change
 # que agregue modelos suma su import acá.
 from app.modules.usuarios import models as _modelos_usuarios  # noqa: F401
+from app.modules.clientes import models as _modelos_clientes  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

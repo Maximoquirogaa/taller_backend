@@ -28,6 +28,7 @@ from app.core.database import crear_fabrica_sesiones, crear_motor
 from app.core.dependencies import exige_sin_cambio_pendiente
 from app.modules.health.router import router as router_salud
 from app.modules.usuarios.router import router_auth
+from app.modules.clientes.router import router as router_clientes
 
 logger = getLogger("uvicorn.error")
 
@@ -40,6 +41,7 @@ router_protegido = APIRouter(dependencies=[Depends(exige_sin_cambio_pendiente)])
 
 router_abierto.include_router(router_salud)
 router_abierto.include_router(router_auth)
+router_protegido.include_router(router_clientes)
 
 
 @asynccontextmanager

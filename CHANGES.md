@@ -183,7 +183,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 > Los changes C-04, C-05 y C-06 pueden proponerse en paralelo tras C-03. C-04 y C-05 deben archivarse antes de C-07.
 
 ### [C-04] `clientes-vehiculos`
-- **Estado**: `[ ]` pendiente
+- **Estado**: `[x]` completado (2026-10-30)
 - **Scope**: Fichas de cliente y vehículos con borrado lógico
   - Modelos: `Cliente` (`usuario_id` UNIQUE nulo → 1:1 opcional; `documento` UNIQUE), `Vehiculo` (CHECK anio 1950–2100, `borrado_en`)
   - **Índice único parcial** `(patente) WHERE borrado_en IS NULL` (RN-01)
@@ -204,7 +204,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ---
 
 ### [C-05] `repuestos-stock`
-- **Estado**: `[ ]` pendiente
+- **Estado**: [ ] pendiente
 - **Scope**: Catálogo de repuestos con stock por movimientos e historial de precios
   - Modelos: `Repuesto` (precio NUMERIC(10,2) CHECK > 0, stock CHECK >= 0, `borrado_en`), `MovimientoStock`, `HistorialPrecioRepuesto` (CHECK `precio_nuevo > precio_anterior`)
   - **Índice único parcial** `(codigo) WHERE borrado_en IS NULL`
@@ -226,7 +226,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ---
 
 ### [C-06] `usuarios-roles-auditoria`
-- **Estado**: `[ ]` pendiente
+- **Estado**: [ ] pendiente
 - **Scope**: Administración de personal, roles con vigencia y auditoría (todo ADMIN)
   - `POST /usuarios` — alta de empleado con contraseña provisoria y `debe_cambiar_password=true`; 409 email repetido; emite `evento_seguridad` (US-008)
   - `POST /usuarios/{id}/roles` — otorgar rol con `vencimiento` opcional (zona horaria obligatoria, futuro); 409 si ya tiene rol abierto (índice parcial); reasignar vencido cierra la fila anterior (US-009, RN-03)
@@ -247,7 +247,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ## FASE 3 — Órdenes de trabajo
 
 ### [C-07] `ordenes-crud`
-- **Estado**: `[ ]` pendiente
+- **Estado**: [ ] pendiente
 - **Scope**: Modelo de órdenes (composición + catálogo de estados) con apertura, listado y detalle
   - Modelos: `EstadoOrden` (PK = `codigo`, `posicion` UNIQUE, `es_final`), `OrdenTrabajo`, `ItemOrden`, `HistorialEstadoOrden`
   - `ItemOrden`: **UNIQUE** `(orden_id, repuesto_id)` — composición, sin repetidos; `precio_unitario` copiado del repuesto (RN-10)
@@ -269,7 +269,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ---
 
 ### [C-08] `ordenes-lifecycle`
-- **Estado**: `[ ]` pendiente
+- **Estado**: [ ] pendiente
 - **Scope**: Máquina de estados de la orden con la transacción crítica de stock
   - `POST /ordenes/{id}/iniciar` — MECANICO; PENDIENTE → EN_REPARACION con `mecanico_id` = yo; 409 si el estado no lo permite; línea de historial (US-026, RN-11)
   - `POST /ordenes/{id}/terminar` — mecánico asignado **o** ADMIN (ruta sin `requiere_rol` simple); en **un solo UoW**: verificar permiso y estado → chequear stock de cada ítem → si alguno no alcanza, lanzar y revertir **todo** (409, sin escrituras parciales, ejercicio C-11 de la consigna) → descontar stock + `movimiento_stock` por salida → estado TERMINADA + historial; tras confirmar, aviso con `BackgroundTasks` (`asyncio.sleep(0.5)` + log) (US-027, RN-13, RN-14)
@@ -289,7 +289,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ## FASE 4 — Integridad en la base
 
 ### [C-09] `append-only-triggers`
-- **Estado**: `[ ]` pendiente
+- **Estado**: [ ] pendiente
 - **Scope**: Disparador de sólo agregado instalado por migración escrita a mano + prueba SQL
   - Migración de **desarrollo** 006 **escrita a mano** (no autogenerate): función + disparadores que rechazan UPDATE y DELETE en `historial_estado_orden`, `movimiento_stock` e `historial_precio_repuesto` (RN-15); comentario explícito en la migración de que es a mano (DD-08). **Esta migración sobrevive a la consolidación**: en C-11 se renumera a `002` y se conserva tal cual
   - La migración se escribe sin depender de identificadores autogenerados (solo `op.execute` con `CREATE OR REPLACE FUNCTION` / `DROP TRIGGER IF EXISTS`), para que renumerarla sea mecánico
@@ -309,7 +309,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ## FASE 5 — Estado inicial y entrega
 
 ### [C-10] `seed-inicial`
-- **Estado**: `[ ]` pendiente
+- **Estado**: [ ] pendiente
 - **Scope**: `seed.py` que deja la base en el estado inicial conocido
   - Vacía tablas y carga en orden: catálogo `estado_orden` (PENDIENTE, EN_REPARACION, TERMINADA final, CANCELADA final) **primero**; usuarios (admin@, admin2@, recepcion@, mecánicos, cliente@, nuevo@ con cambio obligatorio); clientes (Laura con usuario + 2 vehículos, Jorge sin usuario + 1 vehículo); repuestos (4 piezas con stock inicial como movimiento); órdenes (una PENDIENTE, una EN_REPARACION asignada pidiendo 4 bujías con stock 2 — caso de stock insuficiente); historial de precios 8000→8500; `evento_seguridad` de `SISTEMA` «Carga de los datos iniciales»
   - Contraseñas ficticias solo en `seed.py`, nunca como secretos reales en el repo
@@ -326,7 +326,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ---
 
 ### [C-11] `evidencia-entrega`
-- **Estado**: `[ ]` pendiente
+- **Estado**: [ ] pendiente
 - **Scope**: **Consolidación de migraciones** + suite HTTP de la consigna + evidencias + README de entrega
   - **Consolidar el esquema en las dos migraciones del entregable** (ver §Estrategia de migraciones): borrar `migrations/versions/*` → `alembic revision --autogenerate -m "esquema inicial"` sobre base vacía con todos los modelos importados en `env.py` → renumerar a `002` la migración del disparador de C-09 (ajustar `down_revision`, conservarla tal cual) → verificar `upgrade head` → `alembic check` sin diferencias → `downgrade base` → `upgrade head` → `solo_agregado.sql` → `python seed.py` → `pytest`
   - `test/*.http` con los casos ejercicio C-01…C-19 de la consigna, cada uno con la respuesta esperada; login con `# @no-cookie-jar` y captura del `Set-Cookie` (DD-04)

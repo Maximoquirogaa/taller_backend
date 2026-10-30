@@ -32,6 +32,8 @@ RAIZ_DEL_PROYECTO = Path(__file__).resolve().parents[1]
 BASE_DE_PRUEBAS = "taller_test"
 TIEMPO_LIMITE_CONEXION = 3.0
 TABLAS_DE_ACCESO = (
+    "vehiculo",
+    "cliente",
     "asignacion_rol",
     "intento_acceso",
     "evento_seguridad",
