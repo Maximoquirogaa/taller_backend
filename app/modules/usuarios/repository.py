@@ -9,13 +9,14 @@ propias siempre confirmadas (DD-07), así que el conteo refleja la tabla real.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.repository import BaseRepository
-from app.modules.usuarios.models import AsignacionRol, IntentoAcceso, Usuario
+from app.modules.usuarios.models import AsignacionRol, EventoSeguridad, IntentoAcceso, Usuario
 
 
 class RepositorioUsuarios(BaseRepository[Usuario]):
@@ -30,16 +31,54 @@ class RepositorioUsuarios(BaseRepository[Usuario]):
 
 
 class RepositorioRoles(BaseRepository[AsignacionRol]):
-    """Acceso a `asignacion_rol`: alta y consulta de vigencias (RN-03/RN-04)."""
+    """Acceso a `asignacion_rol`: alta, vigencias e historial (RN-03/RN-04)."""
 
     modelo = AsignacionRol
 
-    async def asignar(self, usuario_id: int, rol: str) -> AsignacionRol:
-        """Abre una asignación de rol (sin revocar historiales previos, RN-03)."""
-        return await self.add(AsignacionRol(usuario_id=usuario_id, rol=rol))
+    async def asignar(
+        self,
+        usuario_id: int,
+        rol: str,
+        vence_en: datetime | None = None,
+        otorgada_por: int | None = None,
+    ) -> AsignacionRol:
+        """Abre una asignación de rol (sin tocar historiales previos, RN-03).
+
+        Args:
+            usuario_id: usuario que recibe el rol.
+            rol: rol del catálogo (`ADMIN/RECEPCION/MECANICO/CLIENTE`).
+            vence_en: vencimiento opcional, ya normalizado a UTC y futuro (US-009).
+            otorgada_por: id del ADMIN que otorga (US-009).
+
+        Returns:
+            La fila recién abierta (con `id` tras el `flush`).
+        """
+        return await self.add(
+            AsignacionRol(
+                usuario_id=usuario_id,
+                rol=rol,
+                vence_en=vence_en,
+                otorgada_por=otorgada_por,
+            )
+        )
 
     async def existe_abierta(self, usuario_id: int, rol: str) -> bool:
         """Comprueba si ya hay una asignación abierta del rol (RN-03)."""
+        return await self.get_abierta(usuario_id, rol) is not None
+
+    async def get_abierta(self, usuario_id: int, rol: str) -> AsignacionRol | None:
+        """Devuelve la asignación **abierta** del rol (`revocada_en IS NULL`, RN-03).
+
+        Es exactamente lo que indexa `uq_asignacion_rol_abierta`: una fila abierta
+        vencida sigue bloqueando el `INSERT` aunque ya no otorgue permisos.
+
+        Args:
+            usuario_id: usuario consultado.
+            rol: rol del catálogo.
+
+        Returns:
+            La fila abierta o `None` si el rol fue revocado o nunca se asignó.
+        """
         resultado = await self.session.execute(
             select(AsignacionRol).where(
                 AsignacionRol.usuario_id == usuario_id,
@@ -47,7 +86,37 @@ class RepositorioRoles(BaseRepository[AsignacionRol]):
                 AsignacionRol.revocada_en.is_(None),
             )
         )
-        return resultado.scalars().first() is not None
+        return resultado.scalars().first()
+
+    async def revocar(
+        self, asignacion: AsignacionRol, cuando: datetime | None = None
+    ) -> AsignacionRol:
+        """Cierra la asignación escribiendo `revocada_en`: la fila **nunca** se borra (RN-04).
+
+        Args:
+            asignacion: fila abierta a cerrar.
+            cuando: instante del cierre; por defecto el actual en UTC.
+
+        Returns:
+            La misma fila, ya marcada y sincronizada (`flush`, sin `commit`).
+        """
+        return await self.update(asignacion, {"revocada_en": cuando or datetime.now(UTC)})
+
+    async def get_historial(self, usuario_id: int) -> Sequence[AsignacionRol]:
+        """Historial completo del usuario, incluidas las filas revocadas (RN-04/RN-05).
+
+        Args:
+            usuario_id: usuario consultado.
+
+        Returns:
+            Todas sus asignaciones ordenadas por `desde` (del pasado al presente).
+        """
+        resultado = await self.session.execute(
+            select(AsignacionRol)
+            .where(AsignacionRol.usuario_id == usuario_id)
+            .order_by(AsignacionRol.desde, AsignacionRol.id)
+        )
+        return resultado.scalars().all()
 
 
 class RepositorioIntentos(BaseRepository[IntentoAcceso]):
@@ -101,6 +170,53 @@ class RepositorioIntentos(BaseRepository[IntentoAcceso]):
     async def register_intento(self, email: str, ip: str, exito: bool) -> None:
         """Inserta una fila de intento (éxito o fallo) con flush, sin commit."""
         await self.add(IntentoAcceso(email=email, ip=ip, exito=exito))
+
+
+class RepositorioEventos(BaseRepository[EventoSeguridad]):
+    """Acceso a `evento_seguridad`: registro y consulta paginada (US-011).
+
+    El evento se escribe en la **misma transacción** del cambio de dominio
+    (design.md, decisión 2): `registrar` solo hace `flush` y el UoW confirma.
+    """
+
+    modelo = EventoSeguridad
+
+    async def registrar(self, actor: str, accion: str) -> EventoSeguridad:
+        """Agrega un evento de seguridad con `flush`, sin confirmar.
+
+        Args:
+            actor: email del usuario que actuó, o `SISTEMA` (sin FK, DD-07).
+            accion: operación y entidad afectada (US-011).
+
+        Returns:
+            El evento insertado (con `id` y `cuando` tras el `flush`).
+        """
+        return await self.add(EventoSeguridad(actor=actor, accion=accion))
+
+    async def buscar_paginado(
+        self, offset: int, limit: int | None = None
+    ) -> tuple[Sequence[EventoSeguridad], int]:
+        """Devuelve una página de eventos del más reciente al más antiguo (US-011).
+
+        Args:
+            offset: filas a saltear (ya validado por `ParametrosPagina`).
+            limit: tamaño de la página (`None` = sin tope).
+
+        Returns:
+            Tupla `(items, total)` para armar el envoltorio con `construir_pagina`.
+        """
+        consulta = (
+            select(EventoSeguridad)
+            .order_by(EventoSeguridad.cuando.desc(), EventoSeguridad.id.desc())
+            .offset(offset)
+        )
+        if limit is not None:
+            consulta = consulta.limit(limit)
+        items = (await self.session.execute(consulta)).scalars().all()
+
+        consulta_total = select(func.count()).select_from(EventoSeguridad)
+        total = int((await self.session.execute(consulta_total)).scalar_one())
+        return items, total
 
 
 async def roles_vigentes_de(sesion: AsyncSession, usuario_id: int) -> list[str]:

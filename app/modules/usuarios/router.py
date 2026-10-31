@@ -1,12 +1,16 @@
-"""Endpoints del módulo usuarios (capa Router, grupo abierto `/auth`).
+"""Endpoints del módulo usuarios (capa Router).
 
-Estas rutas viven en el **grupo abierto** (DD-10: salud y `/auth`). El control
-de cambio obligatorio está montado en el grupo protegido, no acá. El token
-NUNCA viaja en el cuerpo (DD-04): la cookie se emite con `Set-Cookie`
-explícito (HttpOnly, SameSite=Lax, Max-Age, Secure configurable).
+Dos routers:
+
+- `router_auth` (`/auth`): grupo **abierto** (DD-10: salud y `/auth`). El token
+  NUNCA viaja en el cuerpo (DD-04): la cookie se emite con `Set-Cookie`
+  explícito (HttpOnly, SameSite=Lax, Max-Age, Secure configurable).
+- `router_usuarios`: administración de personal, roles y auditoría (C-06). Se
+  monta en `router_protegido` (`main.py`), así hereda el control del cambio de
+  contraseña pendiente (RN-06) y exige `ADMIN` vigente en la base (RN-04).
 
 Errores (RN-18): ninguna entrada inválida termina en 500 y ningún texto
-interno de la base llega al cliente; `IntegrityError` → 409 (email duplicado).
+interno de la base llega al cliente; `IntegrityError` → 409 con mensaje propio.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.dependencies import UsuarioAutenticado, usuario_actual
+from app.core.dependencies import UsuarioAutenticado, requiere_rol, usuario_actual
 from app.core.mensajes_auth import (
     MENSAJE_CREDENCIALES_INVALIDAS,
     MENSAJE_EMAIL_DUPLICADO,
@@ -29,19 +33,26 @@ from app.core.mensajes_auth import (
 from app.core.security import crear_token_acceso
 from app.modules.usuarios import service as servicio_usuarios
 from app.modules.usuarios.schemas import (
+    EntradaAsignarRol,
     EntradaCambioPassword,
+    EntradaCrearUsuario,
     EntradaLogin,
     EntradaRegistro,
+    SalidaAsignacionRol,
     SalidaLogin,
     SalidaRegistro,
     SalidaLogout,
+    SalidaUsuario,
     SalidaYo,
 )
+from app.modules.usuarios.unit_of_work import UoWUsuarios
 
 router_auth = APIRouter(prefix="/auth", tags=["auth"])
+router_usuarios = APIRouter(tags=["usuarios"])
 
 IP_DESCONOCIDA = "127.0.0.1"  # deploy sin `request.client` (p. ej. ASGI interno)
 ROL_CLIENTE = "CLIENTE"  # rol único del auto-registro (consigna)
+ROLES_ADMIN = ("ADMIN",)  # única autorización de la administración de personal
 
 
 def _ip_de(request: Request) -> str:
@@ -234,3 +245,107 @@ async def cambiar_password(
         debe_cambiar_password=False,
         expira_en_segundos=settings.token_expire_segundos,
     )
+
+
+# ── Administración de personal, roles y auditoría (C-06) ─────────────────────
+
+
+@router_usuarios.post(
+    "/usuarios",
+    response_model=SalidaUsuario,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(requiere_rol(ROLES_ADMIN))],
+)
+async def crear_usuario(
+    datos: EntradaCrearUsuario,
+    sesion: Annotated[AsyncSession, Depends(get_session)],
+    usuario: Annotated[UsuarioAutenticado, Depends(usuario_actual)],
+) -> SalidaUsuario:
+    """US-008/RN-01/RN-06: alta de personal con contraseña provisoria y evento en el mismo UoW.
+
+    Args:
+        datos: contrato validado (email único, nombre y contraseña con política).
+        sesion: sesión de la petición (el servicio abre la transacción del UoW).
+        usuario: ADMIN autenticado; su email va como `actor` del evento (US-011).
+
+    Returns:
+        El usuario creado con `debe_cambiar_password=True`, sin hash ni contraseña.
+
+    Raises:
+        HTTPException(409): email ya registrado (excepción de dominio o
+            `IntegrityError` de la base, siempre con mensaje propio).
+        HTTPException(422): contrato inválido (Pydantic, antes de la transacción).
+    """
+    try:
+        empleado = await servicio_usuarios.crear_empleado(
+            UoWUsuarios(sesion), datos, actor_email=usuario.usuario.email
+        )
+    except servicio_usuarios.EmailUsuarioDuplicado as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    except IntegrityError as exc:
+        # Carrera de unicidad: la base decide (RN-01); no se filtra su texto.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=servicio_usuarios.MENSAJE_EMAIL_USUARIO_DUPLICADO,
+        ) from exc
+    return SalidaUsuario.model_validate(empleado)
+
+
+@router_usuarios.post(
+    "/usuarios/{id}/roles",
+    response_model=SalidaAsignacionRol,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(requiere_rol(ROLES_ADMIN))],
+)
+async def otorgar_rol(
+    id: int,
+    datos: EntradaAsignarRol,
+    sesion: Annotated[AsyncSession, Depends(get_session)],
+    usuario: Annotated[UsuarioAutenticado, Depends(usuario_actual)],
+) -> SalidaAsignacionRol:
+    """US-009/RN-03: abre una asignación de rol con vencimiento opcional.
+
+    Args:
+        id: usuario destinatario del rol.
+        datos: `rol` del catálogo y `vencimiento` (con zona y futuro) opcional.
+        sesion: sesión de la petición (el servicio abre la transacción del UoW).
+        usuario: ADMIN autenticado; su id va en `otorgada_por` y su email al evento.
+
+    Returns:
+        La asignación abierta (o la nueva, tras cerrar una vencida).
+
+    Raises:
+        HTTPException(404): usuario inexistente (sin escribir nada).
+        HTTPException(409): el rol ya está abierto y vigente (o el índice único
+            parcial rechazó la carrera, siempre con mensaje propio).
+        HTTPException(422): vencimiento sin zona, pasado o contrato inválido.
+    """
+    try:
+        asignacion = await servicio_usuarios.otorgar_rol(
+            UoWUsuarios(sesion),
+            id,
+            datos,
+            actor_id=usuario.id,
+            actor_email=usuario.usuario.email,
+        )
+    except servicio_usuarios.UsuarioNoEncontrado as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except servicio_usuarios.RolYaAsignado as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    except servicio_usuarios.VencimientoInvalido as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except IntegrityError as exc:
+        # El índice parcial `uq_asignacion_rol_abierta` es la garantía final (RN-03).
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=servicio_usuarios.MENSAJE_ROL_YA_ASIGNADO,
+        ) from exc
+    return SalidaAsignacionRol.model_validate(asignacion)

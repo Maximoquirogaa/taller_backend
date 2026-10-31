@@ -8,9 +8,18 @@ del AGENTS.md) para que los códigos `422` salgan antes de tocar la base.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from datetime import UTC, datetime
+from typing import Literal
+
+from pydantic import AwareDatetime, BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.core.security import validar_password
+
+ROL_ADMIN = "ADMIN"
+ROLES_ASIGNABLES = ("ADMIN", "RECEPCION", "MECANICO", "CLIENTE")
+MENSAJE_VENCIMIENTO_INVALIDO = (
+    "El vencimiento debe ser una fecha futura y llevar zona horaria."
+)
 
 
 class _ContratoEstricto(BaseModel):
@@ -128,3 +137,101 @@ class SalidaLogout(_ContratoEstricto):
     """Respuesta del logout: mensaje propio, sin datos de sesión (US-005)."""
 
     mensaje: str
+
+
+# ── Contratos de administración de personal y auditoría (C-06) ───────────────
+
+
+class EntradaCrearUsuario(_ContratoEstricto):
+    """Alta de personal por un ADMIN (US-008): provisoria con la política vigente."""
+
+    email: EmailStr
+    nombre: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=1)
+
+    @field_validator("password", mode="after")
+    @classmethod
+    def _aplicar_politica(cls, valor: str) -> str:
+        """Aplica la política de contraseñas antes de abrir la transacción (422).
+
+        Args:
+            valor: contraseña provisoria recibida.
+
+        Returns:
+            La misma contraseña, si cumple la política (≤ 72 bytes incluidos).
+
+        Raises:
+            ValueError: con el mensaje de `validar_password` (Pydantic lo
+                convierte en `422` con el texto propio).
+        """
+        validar_password(valor)
+        return valor
+
+
+class SalidaUsuario(_ContratoEstricto):
+    """Usuario creado o consultado: nunca expone hash ni contraseña (RN-18)."""
+
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    id: int
+    email: EmailStr
+    nombre: str
+    activo: bool
+    debe_cambiar_password: bool
+
+
+class EntradaAsignarRol(_ContratoEstricto):
+    """Otorgamiento de rol con vencimiento opcional (US-009, RN-03).
+
+    `vencimiento` debe llevar zona horaria (Pydantic v2 rechaza `datetime`
+    ingenuo con 422) y ser futuro; se normaliza a UTC antes de persistir.
+    """
+
+    rol: Literal["ADMIN", "RECEPCION", "MECANICO", "CLIENTE"]
+    vencimiento: AwareDatetime | None = None
+
+    @field_validator("vencimiento", mode="after")
+    @classmethod
+    def _exigir_futuro_con_zona(cls, valor: datetime | None) -> datetime | None:
+        """Normaliza a UTC y exige que el vencimiento sea posterior al instante actual.
+
+        Args:
+            valor: vencimiento recibido (Pydantic ya exigió zona horaria).
+
+        Returns:
+            El vencimiento en UTC, o `None` si no se envió.
+
+        Raises:
+            ValueError: si el vencimiento no es futuro (`422`).
+        """
+        if valor is None:
+            return None
+        normalizado = valor.astimezone(UTC)
+        if normalizado <= datetime.now(UTC):
+            raise ValueError(MENSAJE_VENCIMIENTO_INVALIDO)
+        return normalizado
+
+
+class SalidaAsignacionRol(_ContratoEstricto):
+    """Asignación de rol devuelta por el alta y por la revocación (US-009/US-010)."""
+
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    id: int
+    usuario_id: int
+    rol: str
+    desde: datetime
+    vence_en: datetime | None = None
+    revocada_en: datetime | None = None
+    otorgada_por: int | None = None
+
+
+class SalidaEvento(_ContratoEstricto):
+    """Evento de seguridad consultable por el ADMIN (US-011)."""
+
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    id: int
+    cuando: datetime
+    actor: str
+    accion: str

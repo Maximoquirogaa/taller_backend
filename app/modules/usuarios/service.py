@@ -21,13 +21,20 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.security import hash_password, obtener_hash_ficticio, verificar_password
-from app.modules.usuarios.models import Usuario
+from app.modules.usuarios.models import AsignacionRol, Usuario
 from app.modules.usuarios.repository import (
     RepositorioIntentos,
     RepositorioUsuarios,
     roles_vigentes_de,
 )
-from app.modules.usuarios.schemas import EntradaCambioPassword, EntradaRegistro
+from app.modules.usuarios.schemas import (
+    MENSAJE_VENCIMIENTO_INVALIDO,
+    ROL_ADMIN,
+    EntradaAsignarRol,
+    EntradaCambioPassword,
+    EntradaCrearUsuario,
+    EntradaRegistro,
+)
 from app.modules.usuarios.unit_of_work import UoWUsuarios
 
 # ── Constantes del límite de intentos (RN-08) ────────────────────────────────
@@ -36,6 +43,19 @@ MAX_INTENTOS_FALLIDOS = 5  # 5 fallos del mismo email+IP disparan el límite
 VENTANA_INTENTOS_SEGUNDOS = 60  # ventana de conteo (60 s)
 ROL_CLIENTE = "CLIENTE"  # rol que el auto-registro asigna (consigna, US-003)
 
+# ── Mensajes y acciones de la administración de personal (C-06) ──────────────
+
+MENSAJE_EMAIL_USUARIO_DUPLICADO = "El email ya está registrado por otro usuario."
+MENSAJE_USUARIO_NO_ENCONTRADO = "El usuario solicitado no existe."
+MENSAJE_ROL_YA_ASIGNADO = "El usuario ya tiene ese rol vigente."
+MENSAJE_ROL_NO_VIGENTE = "El usuario no tiene ese rol abierto."
+MENSAJE_AUTORREVOCACION = "Un administrador no puede revocar su propio rol ADMIN."
+
+ACCION_ALTA_PERSONAL = "alta_personal"
+ACCION_ROL_OTORGADO = "rol_otorgado"
+ACCION_ROL_REVOCADO = "rol_revocado"
+ACCION_CAMBIO_PASSWORD = "cambio_password"
+
 
 class CredencialesInvalidas(Exception):
     """Login que no corresponde o cambio con la contraseña actual incorrecta.
@@ -43,6 +63,30 @@ class CredencialesInvalidas(Exception):
     El router responde 401 con un mensaje genérico e idéntico en todos los
     casos (RN-09): ninguna subclase expone el detalle exacto del fallo.
     """
+
+
+class EmailUsuarioDuplicado(Exception):
+    """El email ya pertenece a un usuario: el alta responde 409 sin escribir nada (RN-01)."""
+
+
+class UsuarioNoEncontrado(Exception):
+    """El usuario indicado en la ruta no existe (US-009/US-010, 404)."""
+
+
+class RolYaAsignado(Exception):
+    """El usuario ya tiene una asignación abierta y vigente del mismo rol (RN-03, 409)."""
+
+
+class RolNoVigente(Exception):
+    """El usuario no tiene ese rol abierto (inexistente, revocado o vencido): 404."""
+
+
+class AutorrevocacionProhibida(Exception):
+    """Un ADMIN intentó revocar su propio ADMIN: el sistema se quedaría sin administradores (RN-05, 409)."""
+
+
+class VencimientoInvalido(Exception):
+    """El vencimiento del rol no es futuro o no lleva zona horaria (US-009, 422)."""
 
 
 @dataclass
@@ -122,6 +166,166 @@ async def registrar_cliente(
         await uow.roles.asignar(_exigir_id(usuario), ROL_CLIENTE)
         await uow.intentos.register_intento(datos.email, ip, exito=True)  # intento inicial
     return usuario
+
+
+async def crear_empleado(
+    uow: UoWUsuarios,
+    datos: EntradaCrearUsuario,
+    actor_email: str,
+) -> Usuario:
+    """Da de alta un empleado con contraseña provisoria y audita el alta (US-008, RN-01).
+
+    El router construye el UoW y este servicio lo abre; `hash_password` corre
+    **antes** del `async with` (regla dura: bcrypt nunca dentro de la
+    transacción). El usuario queda con `debe_cambiar_password=True` y el evento
+    `alta_personal` se escribe en la **misma** transacción (design.md, decisión 2).
+
+    Args:
+        uow: transacción de usuarios construida por el router (la abre el servicio).
+        datos: contrato validado (`email` único, `nombre`, contraseña política).
+        actor_email: email del ADMIN autenticado (autor del evento, US-011).
+
+    Returns:
+        El `Usuario` creado (con `id` tras la confirmación del UoW).
+
+    Raises:
+        EmailUsuarioDuplicado: si el email ya pertenece a otro usuario (409): no
+            queda ni el usuario ni el evento.
+        ValueError: si la contraseña no cumpliera la política (el contrato ya la
+            validó; fail-fast defensivo).
+        sqlalchemy.exc.IntegrityError: si la base rechaza la escritura por una
+            carrera de unicidad (el router lo traduce a 409).
+    """
+    hash_calculado = await hash_password(datos.password)  # fuera de la transacción
+
+    async with uow:
+        if await uow.usuarios.get_por_email(datos.email) is not None:
+            raise EmailUsuarioDuplicado(MENSAJE_EMAIL_USUARIO_DUPLICADO)
+
+        usuario = await uow.usuarios.add(
+            Usuario(
+                email=datos.email,
+                nombre=datos.nombre,
+                password_hash=hash_calculado,
+                debe_cambiar_password=True,
+            )
+        )
+        await uow.eventos.registrar(
+            actor_email, f"{ACCION_ALTA_PERSONAL}: {usuario.email}"
+        )
+    return usuario
+
+
+async def otorgar_rol(
+    uow: UoWUsuarios,
+    usuario_id: int,
+    datos: EntradaAsignarRol,
+    actor_id: int,
+    actor_email: str,
+) -> AsignacionRol:
+    """Abre una asignación de rol con vigencia opcional y audita el cambio (US-009, RN-03).
+
+    Distingue los tres estados de la fila abierta (design.md, decisión 4):
+
+    - abierta **vigente** (`vence_en` nulo o futuro) → `RolYaAsignado` (409);
+    - abierta **vencida** → se cierra con `revocada_en = ahora` (no es una
+      revocación: es el cierre de una asignación que ya no otorgaba permisos) y
+      se abre la nueva fila;
+    - sin fila abierta (nunca asignada o revocada) → se abre directamente.
+
+    Args:
+        uow: transacción de usuarios construida por el router (la abre el servicio).
+        usuario_id: destinatario del rol (de la ruta).
+        datos: `rol` del catálogo y `vencimiento` ya validado y normalizado.
+        actor_id: id del ADMIN autenticado (va en `otorgada_por`, nunca en la ruta).
+        actor_email: email del ADMIN autenticado (autor del evento, US-011).
+
+    Returns:
+        La asignación recién abierta (con `id` tras la confirmación del UoW).
+
+    Raises:
+        VencimientoInvalido: si el vencimiento no fuera futuro (422 defensivo,
+            el contrato ya lo validó).
+        UsuarioNoEncontrado: si el usuario de la ruta no existe (404).
+        RolYaAsignado: si la fila abierta del rol sigue vigente (409).
+        sqlalchemy.exc.IntegrityError: si dos ADMIN compiten por el mismo rol:
+            el índice parcial es la garantía final (el router lo traduce a 409).
+    """
+    ahora = datetime.now(UTC)
+    if datos.vencimiento is not None and datos.vencimiento <= ahora:
+        raise VencimientoInvalido(MENSAJE_VENCIMIENTO_INVALIDO)
+
+    async with uow:
+        if await uow.usuarios.get_by_id(usuario_id) is None:
+            raise UsuarioNoEncontrado(MENSAJE_USUARIO_NO_ENCONTRADO)
+
+        abierta = await uow.roles.get_abierta(usuario_id, datos.rol)
+        if abierta is not None:
+            vigente = abierta.vence_en is None or abierta.vence_en > ahora
+            if vigente:
+                raise RolYaAsignado(MENSAJE_ROL_YA_ASIGNADO)
+            # Cierre de la asignación vencida: conserva `desde` y el `vence_en` pactado.
+            await uow.roles.revocar(abierta, ahora)
+
+        asignacion = await uow.roles.asignar(
+            usuario_id,
+            datos.rol,
+            vence_en=datos.vencimiento,
+            otorgada_por=actor_id,
+        )
+        await uow.eventos.registrar(
+            actor_email, f"{ACCION_ROL_OTORGADO}: {datos.rol} (usuario {usuario_id})"
+        )
+    return asignacion
+
+
+async def revocar_rol(
+    uow: UoWUsuarios,
+    usuario_id: int,
+    rol: str,
+    actor_id: int,
+    actor_email: str,
+) -> AsignacionRol:
+    """Cierra la asignación abierta escribiendo `revocada_en` y audita la revocación (US-010).
+
+    La autoprotección de RN-05 se comprueba **antes** de abrir la transacción y
+    de tocar cualquier fila: un ADMIN no puede revocar su propio `ADMIN`, pero
+    sí puede revocar el `ADMIN` de otro usuario. La fila nunca se borra
+    (design.md, decisión 5): el cierre conserva `desde`, `vence_en` y el historial.
+
+    Args:
+        uow: transacción de usuarios construida por el router (la abre el servicio).
+        usuario_id: usuario afectado (de la ruta).
+        rol: rol del catálogo a revocar (de la ruta).
+        actor_id: id del ADMIN autenticado (nunca de la ruta).
+        actor_email: email del ADMIN autenticado (autor del evento, US-011).
+
+    Returns:
+        La asignación revocada (con `revocada_en` escrito y `desde` intacto).
+
+    Raises:
+        AutorrevocacionProhibida: si el ADMIN intenta revocar su propio ADMIN (409).
+        UsuarioNoEncontrado: si el usuario de la ruta no existe (404).
+        RolNoVigente: si no hay asignación abierta o está vencida (404): no se
+            modifica ninguna fila ni se escribe evento.
+    """
+    if actor_id == usuario_id and rol == ROL_ADMIN:
+        raise AutorrevocacionProhibida(MENSAJE_AUTORREVOCACION)
+
+    ahora = datetime.now(UTC)
+    async with uow:
+        if await uow.usuarios.get_by_id(usuario_id) is None:
+            raise UsuarioNoEncontrado(MENSAJE_USUARIO_NO_ENCONTRADO)
+
+        abierta = await uow.roles.get_abierta(usuario_id, rol)
+        if abierta is None or (abierta.vence_en is not None and abierta.vence_en <= ahora):
+            raise RolNoVigente(MENSAJE_ROL_NO_VIGENTE)
+
+        revocada = await uow.roles.revocar(abierta, ahora)
+        await uow.eventos.registrar(
+            actor_email, f"{ACCION_ROL_REVOCADO}: {rol} (usuario {usuario_id})"
+        )
+    return revocada
 
 
 async def autentica(

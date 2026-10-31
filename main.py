@@ -27,7 +27,7 @@ from app.core.config import cargar_settings
 from app.core.database import crear_fabrica_sesiones, crear_motor
 from app.core.dependencies import exige_sin_cambio_pendiente
 from app.modules.health.router import router as router_salud
-from app.modules.usuarios.router import router_auth
+from app.modules.usuarios.router import router_auth, router_usuarios
 from app.modules.clientes.router import router as router_clientes
 from app.modules.repuestos.router import router as router_repuestos
 
@@ -44,6 +44,7 @@ router_abierto.include_router(router_salud)
 router_abierto.include_router(router_auth)
 router_protegido.include_router(router_clientes)
 router_protegido.include_router(router_repuestos)
+router_protegido.include_router(router_usuarios)
 
 
 @asynccontextmanager

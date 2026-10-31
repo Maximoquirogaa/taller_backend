@@ -1,1 +1,1 @@
-"""Módulo usuarios."""
+# usuarios module

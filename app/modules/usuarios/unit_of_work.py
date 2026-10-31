@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.unit_of_work import UnitOfWork
 from app.modules.usuarios.repository import (
+    RepositorioEventos,
     RepositorioIntentos,
     RepositorioRoles,
     RepositorioUsuarios,
@@ -22,6 +23,7 @@ class UoWUsuarios(UnitOfWork):
     usuarios: RepositorioUsuarios
     roles: RepositorioRoles
     intentos: RepositorioIntentos
+    eventos: RepositorioEventos
 
     def __init__(self, session: AsyncSession) -> None:
         """Recibe la sesión de la petición y arma los repositorios sobre ella."""
@@ -29,3 +31,4 @@ class UoWUsuarios(UnitOfWork):
         self.usuarios = RepositorioUsuarios(session)
         self.roles = RepositorioRoles(session)
         self.intentos = RepositorioIntentos(session)
+        self.eventos = RepositorioEventos(session)
