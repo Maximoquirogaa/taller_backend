@@ -44,9 +44,8 @@ async def crear_cliente(
 ) -> SalidaCliente:
     """Registra un cliente de mostrador (sin usuario web) — solo RECEPCION o ADMIN."""
     try:
-        async with UoWClientes(session) as uow:
-            cliente = await servicio_clientes.crear_cliente(uow, datos)
-            return SalidaCliente.model_validate(cliente)
+        cliente = await servicio_clientes.crear_cliente(UoWClientes(session), datos)
+        return SalidaCliente.model_validate(cliente)
     except servicio_clientes.DocumentoDuplicado as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -65,9 +64,10 @@ async def obtener_cliente(
 ) -> SalidaClienteDetalle:
     """Obtiene la ficha de un cliente con sus vehículos precargados — solo RECEPCION o ADMIN."""
     try:
-        async with UoWClientes(session) as uow:
-            cliente = await servicio_clientes.obtener_cliente_detalle(uow, id)
-            return SalidaClienteDetalle.model_validate(cliente)
+        cliente = await servicio_clientes.obtener_cliente_detalle(
+            UoWClientes(session), id
+        )
+        return SalidaClienteDetalle.model_validate(cliente)
     except servicio_clientes.ClienteNoEncontrado as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -88,9 +88,10 @@ async def crear_vehiculo(
 ) -> SalidaVehiculo:
     """Registra un vehículo asociado a un cliente — solo RECEPCION o ADMIN."""
     try:
-        async with UoWClientes(session) as uow:
-            vehiculo = await servicio_clientes.crear_vehiculo(uow, id, datos)
-            return SalidaVehiculo.model_validate(vehiculo)
+        vehiculo = await servicio_clientes.crear_vehiculo(
+            UoWClientes(session), id, datos
+        )
+        return SalidaVehiculo.model_validate(vehiculo)
     except servicio_clientes.ClienteNoEncontrado as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -114,8 +115,7 @@ async def dar_baja_vehiculo(
 ) -> None:
     """Baja lógica de un vehículo si no tiene órdenes abiertas — solo RECEPCION o ADMIN."""
     try:
-        async with UoWClientes(session) as uow:
-            await servicio_clientes.dar_baja_vehiculo(uow, id)
+        await servicio_clientes.dar_baja_vehiculo(UoWClientes(session), id)
     except servicio_clientes.VehiculoNoEncontrado as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -137,8 +137,7 @@ async def mis_vehiculos(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> list[SalidaVehiculo]:
     """Lista exclusivamente los vehículos propios del usuario autenticado (RN-17)."""
-    async with UoWClientes(session) as uow:
-        vehiculos = await servicio_clientes.listar_mis_vehiculos(
-            uow, usuario_aut.usuario.id
-        )
-        return [SalidaVehiculo.model_validate(v) for v in vehiculos]
+    vehiculos = await servicio_clientes.listar_mis_vehiculos(
+        UoWClientes(session), usuario_aut.usuario.id
+    )
+    return [SalidaVehiculo.model_validate(v) for v in vehiculos]

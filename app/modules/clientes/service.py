@@ -77,66 +77,71 @@ async def verificar_ordenes_abiertas(session: AsyncSession, vehiculo_id: int) ->
 
 async def crear_cliente(uow: UoWClientes, datos: EntradaCrearCliente) -> Cliente:
     """Crea una ficha de cliente sin usuario asociado (US-012, RN-01)."""
-    existente = await uow.clientes.get_por_documento(datos.documento)
-    if existente is not None:
-        raise DocumentoDuplicado(MENSAJE_DOCUMENTO_DUPLICADO)
+    async with uow:
+        existente = await uow.clientes.get_por_documento(datos.documento)
+        if existente is not None:
+            raise DocumentoDuplicado(MENSAJE_DOCUMENTO_DUPLICADO)
 
-    cliente = Cliente(
-        nombre=datos.nombre,
-        documento=datos.documento,
-        telefono=datos.telefono,
-    )
-    return await uow.clientes.add(cliente)
+        cliente = Cliente(
+            nombre=datos.nombre,
+            documento=datos.documento,
+            telefono=datos.telefono,
+        )
+        return await uow.clientes.add(cliente)
 
 
 async def obtener_cliente_detalle(uow: UoWClientes, cliente_id: int) -> Cliente:
     """Obtiene la ficha de un cliente con sus vehículos precargados (US-016)."""
-    cliente = await uow.clientes.get_con_vehiculos(cliente_id)
-    if cliente is None:
-        raise ClienteNoEncontrado(MENSAJE_CLIENTE_NO_ENCONTRADO)
-    return cliente
+    async with uow:
+        cliente = await uow.clientes.get_con_vehiculos(cliente_id)
+        if cliente is None:
+            raise ClienteNoEncontrado(MENSAJE_CLIENTE_NO_ENCONTRADO)
+        return cliente
 
 
 async def crear_vehiculo(
     uow: UoWClientes, cliente_id: int, datos: EntradaCrearVehiculo
 ) -> Vehiculo:
     """Registra un vehículo asociado a un cliente existente (US-013, RN-01)."""
-    cliente = await uow.clientes.get_by_id(cliente_id)
-    if cliente is None:
-        raise ClienteNoEncontrado(MENSAJE_CLIENTE_NO_ENCONTRADO)
+    async with uow:
+        cliente = await uow.clientes.get_by_id(cliente_id)
+        if cliente is None:
+            raise ClienteNoEncontrado(MENSAJE_CLIENTE_NO_ENCONTRADO)
 
-    patente_normalizada = datos.patente.strip().upper()
-    existente = await uow.vehiculos.get_por_patente_activa(patente_normalizada)
-    if existente is not None:
-        raise PatenteDuplicada(MENSAJE_PATENTE_DUPLICADA)
+        patente_normalizada = datos.patente.strip().upper()
+        existente = await uow.vehiculos.get_por_patente_activa(patente_normalizada)
+        if existente is not None:
+            raise PatenteDuplicada(MENSAJE_PATENTE_DUPLICADA)
 
-    vehiculo = Vehiculo(
-        cliente_id=cliente_id,
-        patente=patente_normalizada,
-        marca=datos.marca,
-        modelo=datos.modelo,
-        anio=datos.anio,
-    )
-    return await uow.vehiculos.add(vehiculo)
+        vehiculo = Vehiculo(
+            cliente_id=cliente_id,
+            patente=patente_normalizada,
+            marca=datos.marca,
+            modelo=datos.modelo,
+            anio=datos.anio,
+        )
+        return await uow.vehiculos.add(vehiculo)
 
 
 async def dar_baja_vehiculo(uow: UoWClientes, vehiculo_id: int) -> None:
     """Realiza la baja lógica de un vehículo si no tiene órdenes abiertas (US-014, RN-16)."""
-    vehiculo = await uow.vehiculos.get_by_id(vehiculo_id)
-    if vehiculo is None:
-        raise VehiculoNoEncontrado(MENSAJE_VEHICULO_NO_ENCONTRADO)
+    async with uow:
+        vehiculo = await uow.vehiculos.get_by_id(vehiculo_id)
+        if vehiculo is None:
+            raise VehiculoNoEncontrado(MENSAJE_VEHICULO_NO_ENCONTRADO)
 
-    if await verificar_ordenes_abiertas(uow.session, vehiculo_id):
-        raise VehiculoConOrdenesAbiertas(MENSAJE_VEHICULO_CON_ORDENES)
+        if await verificar_ordenes_abiertas(uow.session, vehiculo_id):
+            raise VehiculoConOrdenesAbiertas(MENSAJE_VEHICULO_CON_ORDENES)
 
-    await uow.vehiculos.soft_delete(vehiculo)
+        await uow.vehiculos.soft_delete(vehiculo)
 
 
 async def listar_mis_vehiculos(
     uow: UoWClientes, usuario_id: int
 ) -> Sequence[Vehiculo]:
     """Lista exclusivamente los vehículos del cliente vinculado al usuario actual (US-015, RN-17)."""
-    cliente = await uow.clientes.get_por_usuario_id(usuario_id)
-    if cliente is None:
-        return []
-    return await uow.vehiculos.get_por_cliente(cliente.id)
+    async with uow:
+        cliente = await uow.clientes.get_por_usuario_id(usuario_id)
+        if cliente is None:
+            return []
+        return await uow.vehiculos.get_por_cliente(cliente.id)

@@ -462,7 +462,7 @@ async def listar_eventos(
     """Consulta paginada de `evento_seguridad`, del más reciente al más antiguo (US-011).
 
     Args:
-        uow: transacción de usuarios abierta por el router (patrón de listados).
+        uow: transacción de usuarios construida por el router (la abre el servicio).
         parametros: `page`/`size` ya validados por `ParametrosPagina` (422 propio).
 
     Returns:
@@ -472,7 +472,8 @@ async def listar_eventos(
     Raises:
         HTTPException(422): página inexistente (mensaje propio de `construir_pagina`).
     """
-    items, total = await uow.eventos.buscar_paginado(
-        offset=parametros.desplazamiento, limit=parametros.size
-    )
-    return construir_pagina(list(items), total=total, parametros=parametros)
+    async with uow:
+        items, total = await uow.eventos.buscar_paginado(
+            offset=parametros.desplazamiento, limit=parametros.size
+        )
+        return construir_pagina(list(items), total=total, parametros=parametros)

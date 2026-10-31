@@ -416,7 +416,7 @@ async def listar_eventos(
     """US-011: auditoría de seguridad paginada, solo para ADMIN vigente.
 
     Args:
-        sesion: sesión de la petición (el router abre la transacción del UoW).
+        sesion: sesión de la petición (el servicio abre la transacción del UoW).
         parametros: `page`/`size` validados por `ParametrosPagina` (422 propio).
 
     Returns:
@@ -428,8 +428,7 @@ async def listar_eventos(
         HTTPException(422): `page`/`size` inválidos (contrato) o página inexistente
             (mensaje propio de `construir_pagina`), sin consultar la tabla.
     """
-    async with UoWUsuarios(sesion) as uow:
-        pagina = await servicio_usuarios.listar_eventos(uow, parametros)
+    pagina = await servicio_usuarios.listar_eventos(UoWUsuarios(sesion), parametros)
     return PaginaDe[SalidaEvento](
         items=[SalidaEvento.model_validate(evento) for evento in pagina.items],
         total=pagina.total,

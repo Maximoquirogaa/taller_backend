@@ -49,29 +49,30 @@ async def crear_repuesto(
 ) -> Repuesto:
     """Registra una nueva pieza en el catálogo y genera el movimiento de stock inicial (RN-14)."""
     codigo_norm = datos.codigo.strip().upper()
-    existente = await uow.repuestos.get_por_codigo_activo(codigo_norm)
-    if existente is not None:
-        raise CodigoRepuestoDuplicado(MENSAJE_CODIGO_DUPLICADO)
+    async with uow:
+        existente = await uow.repuestos.get_por_codigo_activo(codigo_norm)
+        if existente is not None:
+            raise CodigoRepuestoDuplicado(MENSAJE_CODIGO_DUPLICADO)
 
-    repuesto = Repuesto(
-        codigo=codigo_norm,
-        descripcion=datos.descripcion.strip(),
-        precio=datos.precio,
-        stock=datos.stock_inicial,
-    )
-    await uow.repuestos.add(repuesto)
-
-    # Si hay stock inicial > 0, se anota el movimiento de apertura en el mismo UoW
-    if datos.stock_inicial > 0:
-        movimiento = MovimientoStock(
-            repuesto_id=repuesto.id,  # type: ignore[arg-type]
-            cantidad=datos.stock_inicial,
-            motivo="Stock inicial",
-            usuario_id=usuario_id,
+        repuesto = Repuesto(
+            codigo=codigo_norm,
+            descripcion=datos.descripcion.strip(),
+            precio=datos.precio,
+            stock=datos.stock_inicial,
         )
-        await uow.movimientos.add(movimiento)
+        await uow.repuestos.add(repuesto)
 
-    return repuesto
+        # Si hay stock inicial > 0, se anota el movimiento de apertura en el mismo UoW
+        if datos.stock_inicial > 0:
+            movimiento = MovimientoStock(
+                repuesto_id=repuesto.id,  # type: ignore[arg-type]
+                cantidad=datos.stock_inicial,
+                motivo="Stock inicial",
+                usuario_id=usuario_id,
+            )
+            await uow.movimientos.add(movimiento)
+
+        return repuesto
 
 
 async def actualizar_repuesto(
@@ -81,32 +82,33 @@ async def actualizar_repuesto(
     usuario_id: int | None = None,
 ) -> Repuesto:
     """Actualiza descripción o precio. Si el precio cambia, registra historial (RN-20)."""
-    repuesto = await uow.repuestos.get_by_id(repuesto_id)
-    if repuesto is None:
-        raise RepuestoNoEncontrado(MENSAJE_REPUESTO_NO_ENCONTRADO)
+    async with uow:
+        repuesto = await uow.repuestos.get_by_id(repuesto_id)
+        if repuesto is None:
+            raise RepuestoNoEncontrado(MENSAJE_REPUESTO_NO_ENCONTRADO)
 
-    campos = datos.model_dump(exclude_unset=True)
+        campos = datos.model_dump(exclude_unset=True)
 
-    # Manejo de cambio de precio
-    if "precio" in campos and campos["precio"] is not None:
-        nuevo_precio = campos["precio"]
-        if nuevo_precio <= repuesto.precio:
-            raise PrecioInvalido(MENSAJE_PRECIO_INVALIDO)
+        # Manejo de cambio de precio
+        if "precio" in campos and campos["precio"] is not None:
+            nuevo_precio = campos["precio"]
+            if nuevo_precio <= repuesto.precio:
+                raise PrecioInvalido(MENSAJE_PRECIO_INVALIDO)
 
-        historial = HistorialPrecioRepuesto(
-            repuesto_id=repuesto.id,  # type: ignore[arg-type]
-            usuario_id=usuario_id,
-            precio_anterior=repuesto.precio,
-            precio_nuevo=nuevo_precio,
-        )
-        await uow.historial_precios.add(historial)
-        repuesto.precio = nuevo_precio
+            historial = HistorialPrecioRepuesto(
+                repuesto_id=repuesto.id,  # type: ignore[arg-type]
+                usuario_id=usuario_id,
+                precio_anterior=repuesto.precio,
+                precio_nuevo=nuevo_precio,
+            )
+            await uow.historial_precios.add(historial)
+            repuesto.precio = nuevo_precio
 
-    if "descripcion" in campos and campos["descripcion"] is not None:
-        repuesto.descripcion = campos["descripcion"].strip()
+        if "descripcion" in campos and campos["descripcion"] is not None:
+            repuesto.descripcion = campos["descripcion"].strip()
 
-    await uow.repuestos.update(repuesto, {})
-    return repuesto
+        await uow.repuestos.update(repuesto, {})
+        return repuesto
 
 
 async def reponer_stock(
@@ -116,38 +118,41 @@ async def reponer_stock(
     usuario_id: int | None = None,
 ) -> Repuesto:
     """Suma unidades al stock e inserta el movimiento correspondiente en un solo UoW (RN-14)."""
-    repuesto = await uow.repuestos.get_by_id(repuesto_id)
-    if repuesto is None:
-        raise RepuestoNoEncontrado(MENSAJE_REPUESTO_NO_ENCONTRADO)
+    async with uow:
+        repuesto = await uow.repuestos.get_by_id(repuesto_id)
+        if repuesto is None:
+            raise RepuestoNoEncontrado(MENSAJE_REPUESTO_NO_ENCONTRADO)
 
-    repuesto.stock += datos.cantidad
+        repuesto.stock += datos.cantidad
 
-    movimiento = MovimientoStock(
-        repuesto_id=repuesto.id,  # type: ignore[arg-type]
-        cantidad=datos.cantidad,
-        motivo=datos.motivo.strip(),
-        usuario_id=usuario_id,
-    )
-    await uow.movimientos.add(movimiento)
-    await uow.repuestos.update(repuesto, {})
-    return repuesto
+        movimiento = MovimientoStock(
+            repuesto_id=repuesto.id,  # type: ignore[arg-type]
+            cantidad=datos.cantidad,
+            motivo=datos.motivo.strip(),
+            usuario_id=usuario_id,
+        )
+        await uow.movimientos.add(movimiento)
+        await uow.repuestos.update(repuesto, {})
+        return repuesto
 
 
 async def dar_de_baja_repuesto(uow: UoWRepuestos, repuesto_id: int) -> None:
     """Ejecuta la baja lógica de un repuesto activo (RN-16)."""
-    repuesto = await uow.repuestos.get_by_id(repuesto_id)
-    if repuesto is None:
-        raise RepuestoNoEncontrado(MENSAJE_REPUESTO_NO_ENCONTRADO)
+    async with uow:
+        repuesto = await uow.repuestos.get_by_id(repuesto_id)
+        if repuesto is None:
+            raise RepuestoNoEncontrado(MENSAJE_REPUESTO_NO_ENCONTRADO)
 
-    await uow.repuestos.soft_delete(repuesto)
+        await uow.repuestos.soft_delete(repuesto)
 
 
 async def obtener_repuesto(uow: UoWRepuestos, repuesto_id: int) -> Repuesto:
     """Recupera un repuesto activo por su identificador primario."""
-    repuesto = await uow.repuestos.get_by_id(repuesto_id)
-    if repuesto is None:
-        raise RepuestoNoEncontrado(MENSAJE_REPUESTO_NO_ENCONTRADO)
-    return repuesto
+    async with uow:
+        repuesto = await uow.repuestos.get_by_id(repuesto_id)
+        if repuesto is None:
+            raise RepuestoNoEncontrado(MENSAJE_REPUESTO_NO_ENCONTRADO)
+        return repuesto
 
 
 async def listar_movimientos(
@@ -155,10 +160,11 @@ async def listar_movimientos(
     repuesto_id: int,
 ) -> Sequence[MovimientoStock]:
     """Lista todos los movimientos de stock del repuesto indicado."""
-    repuesto = await uow.repuestos.get_by_id(repuesto_id)
-    if repuesto is None:
-        raise RepuestoNoEncontrado(MENSAJE_REPUESTO_NO_ENCONTRADO)
-    return await uow.movimientos.get_por_repuesto(repuesto_id)
+    async with uow:
+        repuesto = await uow.repuestos.get_by_id(repuesto_id)
+        if repuesto is None:
+            raise RepuestoNoEncontrado(MENSAJE_REPUESTO_NO_ENCONTRADO)
+        return await uow.movimientos.get_por_repuesto(repuesto_id)
 
 
 async def listar_historial_precios(
@@ -166,10 +172,11 @@ async def listar_historial_precios(
     repuesto_id: int,
 ) -> Sequence[HistorialPrecioRepuesto]:
     """Lista el historial de variaciones de precio del repuesto indicado."""
-    repuesto = await uow.repuestos.get_by_id(repuesto_id)
-    if repuesto is None:
-        raise RepuestoNoEncontrado(MENSAJE_REPUESTO_NO_ENCONTRADO)
-    return await uow.historial_precios.get_por_repuesto(repuesto_id)
+    async with uow:
+        repuesto = await uow.repuestos.get_by_id(repuesto_id)
+        if repuesto is None:
+            raise RepuestoNoEncontrado(MENSAJE_REPUESTO_NO_ENCONTRADO)
+        return await uow.historial_precios.get_por_repuesto(repuesto_id)
 
 
 async def buscar_repuestos_paginado(
@@ -180,13 +187,14 @@ async def buscar_repuestos_paginado(
     """Consulta paginada del catálogo de repuestos con filtro de texto seguro (RN-18)."""
     if parametros is None:
         parametros = ParametrosPagina()
-    items, total = await uow.repuestos.buscar_catalogo(
-        q=q,
-        offset=parametros.desplazamiento,
-        limit=parametros.size,
-    )
-    return construir_pagina(
-        list(items),
-        total=total,
-        parametros=parametros,
-    )
+    async with uow:
+        items, total = await uow.repuestos.buscar_catalogo(
+            q=q,
+            offset=parametros.desplazamiento,
+            limit=parametros.size,
+        )
+        return construir_pagina(
+            list(items),
+            total=total,
+            parametros=parametros,
+        )

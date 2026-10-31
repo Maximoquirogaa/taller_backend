@@ -48,17 +48,16 @@ async def listar_repuestos(
     consulta: Annotated[ConsultaRepuestos, Query()],
 ) -> PaginaDe[SalidaRepuesto]:
     """Consulta el catálogo de repuestos activos con búsqueda y paginación (US-017)."""
-    async with UoWRepuestos(session) as uow:
-        pagina = await servicio_repuestos.buscar_repuestos_paginado(
-            uow, q=consulta.q, parametros=consulta
-        )
-        return PaginaDe[SalidaRepuesto](
-            items=[SalidaRepuesto.model_validate(r) for r in pagina.items],
-            total=pagina.total,
-            page=pagina.page,
-            size=pagina.size,
-            pages=pagina.pages,
-        )
+    pagina = await servicio_repuestos.buscar_repuestos_paginado(
+        UoWRepuestos(session), q=consulta.q, parametros=consulta
+    )
+    return PaginaDe[SalidaRepuesto](
+        items=[SalidaRepuesto.model_validate(r) for r in pagina.items],
+        total=pagina.total,
+        page=pagina.page,
+        size=pagina.size,
+        pages=pagina.pages,
+    )
 
 
 @router.post(
@@ -74,11 +73,10 @@ async def crear_repuesto(
 ) -> SalidaRepuesto:
     """Registra una nueva pieza con stock inicial opcional (US-018, RN-14)."""
     try:
-        async with UoWRepuestos(session) as uow:
-            repuesto = await servicio_repuestos.crear_repuesto(
-                uow, datos, usuario_id=usuario.usuario.id
-            )
-            return SalidaRepuesto.model_validate(repuesto)
+        repuesto = await servicio_repuestos.crear_repuesto(
+            UoWRepuestos(session), datos, usuario_id=usuario.usuario.id
+        )
+        return SalidaRepuesto.model_validate(repuesto)
     except servicio_repuestos.CodigoRepuestoDuplicado as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -99,11 +97,10 @@ async def actualizar_repuesto(
 ) -> SalidaRepuesto:
     """Modifica precio y/o descripción. Si cambia el precio, guarda historial (US-019, RN-20)."""
     try:
-        async with UoWRepuestos(session) as uow:
-            repuesto = await servicio_repuestos.actualizar_repuesto(
-                uow, id, datos, usuario_id=usuario.usuario.id
-            )
-            return SalidaRepuesto.model_validate(repuesto)
+        repuesto = await servicio_repuestos.actualizar_repuesto(
+            UoWRepuestos(session), id, datos, usuario_id=usuario.usuario.id
+        )
+        return SalidaRepuesto.model_validate(repuesto)
     except servicio_repuestos.RepuestoNoEncontrado as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -127,8 +124,7 @@ async def dar_de_baja_repuesto(
 ) -> None:
     """Baja lógica de un repuesto activo liberando su código (US-020, RN-16)."""
     try:
-        async with UoWRepuestos(session) as uow:
-            await servicio_repuestos.dar_de_baja_repuesto(uow, id)
+        await servicio_repuestos.dar_de_baja_repuesto(UoWRepuestos(session), id)
     except servicio_repuestos.RepuestoNoEncontrado as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -149,11 +145,10 @@ async def reponer_stock(
 ) -> SalidaRepuesto:
     """Suma unidades de stock y asienta el movimiento en una transacción (US-021, RN-14)."""
     try:
-        async with UoWRepuestos(session) as uow:
-            repuesto = await servicio_repuestos.reponer_stock(
-                uow, id, datos, usuario_id=usuario.usuario.id
-            )
-            return SalidaRepuesto.model_validate(repuesto)
+        repuesto = await servicio_repuestos.reponer_stock(
+            UoWRepuestos(session), id, datos, usuario_id=usuario.usuario.id
+        )
+        return SalidaRepuesto.model_validate(repuesto)
     except servicio_repuestos.RepuestoNoEncontrado as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -172,9 +167,10 @@ async def consultar_movimientos(
 ) -> list[SalidaMovimientoStock]:
     """Lista todos los movimientos históricos del repuesto especificado (US-022)."""
     try:
-        async with UoWRepuestos(session) as uow:
-            movimientos = await servicio_repuestos.listar_movimientos(uow, id)
-            return [SalidaMovimientoStock.model_validate(m) for m in movimientos]
+        movimientos = await servicio_repuestos.listar_movimientos(
+            UoWRepuestos(session), id
+        )
+        return [SalidaMovimientoStock.model_validate(m) for m in movimientos]
     except servicio_repuestos.RepuestoNoEncontrado as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -193,9 +189,10 @@ async def consultar_historial_precios(
 ) -> list[SalidaHistorialPrecio]:
     """Lista el historial de cambios de precio del repuesto especificado (US-022)."""
     try:
-        async with UoWRepuestos(session) as uow:
-            precios = await servicio_repuestos.listar_historial_precios(uow, id)
-            return [SalidaHistorialPrecio.model_validate(p) for p in precios]
+        precios = await servicio_repuestos.listar_historial_precios(
+            UoWRepuestos(session), id
+        )
+        return [SalidaHistorialPrecio.model_validate(p) for p in precios]
     except servicio_repuestos.RepuestoNoEncontrado as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
