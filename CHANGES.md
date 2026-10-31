@@ -226,7 +226,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ---
 
 ### [C-06] `usuarios-roles-auditoria`
-- **Estado**: [ ] pendiente
+- **Estado**: `[x]` completado (archivado 2026-10-31)
 - **Scope**: Administración de personal, roles con vigencia y auditoría (todo ADMIN)
   - `POST /usuarios` — alta de empleado con contraseña provisoria y `debe_cambiar_password=true`; 409 email repetido; emite `evento_seguridad` (US-008)
   - `POST /usuarios/{id}/roles` — otorgar rol con `vencimiento` opcional (zona horaria obligatoria, futuro); 409 si ya tiene rol abierto (índice parcial); reasignar vencido cierra la fila anterior (US-009, RN-03)
