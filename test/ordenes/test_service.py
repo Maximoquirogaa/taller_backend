@@ -16,12 +16,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.ordenes.repository import RepositorioOrdenes
 from app.modules.ordenes.schemas import EntradaCrearOrden, ItemEntrada
+from app.modules.ordenes.models import OrdenTrabajo
 from app.modules.ordenes.service import (
     CatalogoEstadosVacio,
     ConflictoComposicion,
+    OrdenNoEncontrada,
     RepuestoNoDisponible,
+    TransicionInvalida,
     VehiculoNoEncontrado,
     crear_orden,
+    iniciar_orden,
 )
 from app.modules.ordenes.unit_of_work import UoWOrdenes
 from app.modules.usuarios.models import Usuario
@@ -229,3 +233,77 @@ async def test_crear_orden_precio_copiado_inmutable_tras_actualizar_repuesto(
 
     detalle = await RepositorioOrdenes(sesion_db).get_detalle(orden.id)
     assert detalle.items[0].precio_unitario == precio_copiado
+
+
+async def _orden_pendiente(sesion_db: AsyncSession, estado: str = "PENDIENTE") -> int:
+    """Inserta una orden en el estado indicado y devuelve su id."""
+    await insertar_catalogo(sesion_db)
+    cliente = await crear_cliente(sesion_db, nombre="Ana", documento="1")
+    vehiculo = await crear_vehiculo(sesion_db, cliente_id=cliente.id, patente="AAA111")
+    orden = OrdenTrabajo(
+        vehiculo_id=vehiculo.id, estado=estado, falla="Falla", total=Decimal("0")
+    )
+    sesion_db.add(orden)
+    await sesion_db.flush()
+    await sesion_db.commit()
+    await sesion_db.refresh(orden)
+    return orden.id
+
+
+async def _operador_iniciar(sesion_db: AsyncSession) -> Usuario:
+    usuario = Usuario(
+        email="meca@test", nombre="Meca", password_hash="x",
+        activo=True, debe_cambiar_password=False,
+    )
+    sesion_db.add(usuario)
+    await sesion_db.flush()
+    await sesion_db.commit()
+    await sesion_db.refresh(usuario)
+    return usuario
+
+
+async def test_iniciar_orden_pasa_a_en_reparacion_con_mecanico_y_historial(
+    sesion_db: AsyncSession,
+) -> None:
+    """PENDIENTE → EN_REPARACION, mecanico_id = usuario y una línea de historial."""
+    orden_id = await _orden_pendiente(sesion_db, "PENDIENTE")
+    operador = await _operador_iniciar(sesion_db)
+    async with UoWOrdenes(sesion_db) as uow:
+        orden = await iniciar_orden(uow, orden_id=orden_id, usuario_id=operador.id)
+
+    assert orden.estado == "EN_REPARACION"
+    assert orden.mecanico_id == operador.id
+    assert len(orden.historial) == 2
+    ultima = orden.historial[-1]
+    assert ultima.desde_estado == "PENDIENTE"
+    assert ultima.hasta_estado == "EN_REPARACION"
+    assert ultima.usuario_id == operador.id
+
+
+async def test_iniciar_orden_ya_en_reparacion_rechaza(
+    sesion_db: AsyncSession,
+) -> None:
+    """Orden ya EN_REPARACION → `TransicionInvalida`."""
+    orden_id = await _orden_pendiente(sesion_db, "EN_REPARACION")
+    operador = await _operador_iniciar(sesion_db)
+    async with UoWOrdenes(sesion_db) as uow:
+        with pytest.raises(TransicionInvalida):
+            await iniciar_orden(uow, orden_id=orden_id, usuario_id=operador.id)
+
+
+async def test_iniciar_orden_inexistente_rechaza(sesion_db: AsyncSession) -> None:
+    """Orden que no existe → `OrdenNoEncontrada`."""
+    operador = await _operador_iniciar(sesion_db)
+    async with UoWOrdenes(sesion_db) as uow:
+        with pytest.raises(OrdenNoEncontrada):
+            await iniciar_orden(uow, orden_id=999999, usuario_id=operador.id)
+
+
+async def test_iniciar_orden_estado_final_rechaza(sesion_db: AsyncSession) -> None:
+    """Orden TERMINADA o CANCELADA → `TransicionInvalida`."""
+    operador = await _operador_iniciar(sesion_db)
+    for estado in ("TERMINADA", "CANCELADA"):
+        orden_id = await _orden_pendiente(sesion_db, estado)
+        async with UoWOrdenes(sesion_db) as uow:
+            with pytest.raises(TransicionInvalida):
+                await iniciar_orden(uow, orden_id=orden_id, usuario_id=operador.id)

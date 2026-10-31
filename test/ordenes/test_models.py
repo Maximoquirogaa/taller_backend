@@ -23,7 +23,7 @@ from app.modules.ordenes.models import (
     ItemOrden,
     OrdenTrabajo,
 )
-from app.modules.repuestos.models import Repuesto
+from app.modules.repuestos.models import MovimientoStock, Repuesto
 from test.ordenes.conftest import crear_cliente, crear_repuesto, crear_vehiculo, insertar_catalogo
 
 
@@ -170,6 +170,85 @@ async def test_orden_con_estado_fuera_del_catalogo_viola_fk(sesion_db: AsyncSess
     sesion_db.add(
         OrdenTrabajo(
             vehiculo_id=vehiculo.id, estado="INVENTADO", falla="Falla", total=Decimal("0")
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await sesion_db.flush()
+    await sesion_db.rollback()
+
+
+async def test_orden_trabajo_mecanico_id_acepta_nulo_y_usuario(sesion_db: AsyncSession) -> None:
+    """`mecanico_id` es nullable: acepta NULL y el id de un usuario existente."""
+    await insertar_catalogo(sesion_db)
+    from app.modules.usuarios.models import Usuario
+
+    usuario = Usuario(
+        email="meca@test", nombre="Meca", password_hash="x", activo=True,
+        debe_cambiar_password=False,
+    )
+    sesion_db.add(usuario)
+    await sesion_db.flush()
+    await sesion_db.commit()
+    await sesion_db.refresh(usuario)
+
+    cliente = await crear_cliente(sesion_db, nombre="Ana", documento="1")
+    vehiculo = await crear_vehiculo(sesion_db, cliente_id=cliente.id, patente="AAA111")
+
+    # NULL es válido (orden sin mecánico asignado aún)
+    orden_sin_meca = OrdenTrabajo(
+        vehiculo_id=vehiculo.id, estado="PENDIENTE", falla="Falla",
+        total=Decimal("0"), mecanico_id=None,
+    )
+    sesion_db.add(orden_sin_meca)
+    await sesion_db.flush()
+
+    # Un id de usuario válido también es válido
+    orden_con_meca = OrdenTrabajo(
+        vehiculo_id=vehiculo.id, estado="PENDIENTE", falla="Falla 2",
+        total=Decimal("0"), mecanico_id=usuario.id,
+    )
+    sesion_db.add(orden_con_meca)
+    await sesion_db.flush()
+    await sesion_db.commit()
+
+
+async def test_movimiento_stock_requiere_cantidad_positiva(sesion_db: AsyncSession) -> None:
+    """`movimiento_stock.cantidad` debe ser > 0 (CHECK)."""
+    await insertar_catalogo(sesion_db)
+    repuesto = await crear_repuesto(sesion_db, codigo="R1", precio="100.00")
+    from app.modules.usuarios.models import Usuario
+    usuario = Usuario(
+        email="u@test", nombre="U", password_hash="x", activo=True,
+        debe_cambiar_password=False,
+    )
+    sesion_db.add(usuario)
+    await sesion_db.flush()
+    await sesion_db.commit()
+    await sesion_db.refresh(usuario)
+
+    sesion_db.add(
+        MovimientoStock(
+            repuesto_id=repuesto.id,
+            orden_id=None,
+            usuario_id=usuario.id,
+            cantidad=0,
+            motivo="Consumo orden",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await sesion_db.flush()
+    await sesion_db.rollback()
+
+
+async def test_movimiento_stock_requiere_repuesto_y_motivo(sesion_db: AsyncSession) -> None:
+    """`movimiento_stock.repuesto_id` y `motivo` son obligatorios (NOT NULL)."""
+    sesion_db.add(
+        MovimientoStock(
+            repuesto_id=None,
+            orden_id=None,
+            usuario_id=None,
+            cantidad=1,
+            motivo=None,
         )
     )
     with pytest.raises(IntegrityError):
