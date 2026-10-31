@@ -102,7 +102,6 @@ async def usuario_actual(
     id_token = int(payload["sub"])
     usuario = await RepositorioUsuarios(sesion).get_by_id(id_token)
     if usuario is None or not usuario.activo:
-        print(f"[DEBUG-401] usuario ausente/inactivo: id={id_token} usuario={usuario!r}")
         _falla_sesion()
 
     if instantes_token_contra_cambio(payload, usuario):

@@ -15,10 +15,18 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import COSTO_BCRYPT_PREDETERMINADO, verificar_password
+from app.core.security import (
+    COSTO_BCRYPT_PREDETERMINADO,
+    hash_password,
+    verificar_password,
+)
 from app.modules.usuarios import service as servicio_usuarios
 from app.modules.usuarios.models import AsignacionRol, EventoSeguridad, Usuario
-from app.modules.usuarios.schemas import EntradaAsignarRol, EntradaCrearUsuario
+from app.modules.usuarios.schemas import (
+    EntradaAsignarRol,
+    EntradaCambioPassword,
+    EntradaCrearUsuario,
+)
 from app.modules.usuarios.unit_of_work import UoWUsuarios
 
 CONTRASENA_PROVISORIA = "provisoria-2026"
@@ -212,5 +220,74 @@ async def test_revocar_rol_admin_de_otro_usuario_procede(
     assert len(eventos) == 1
     assert eventos[0].accion.startswith("rol_revocado")
     assert eventos[0].actor == CORREO_ADMIN
+
+
+# ── Grupo 7: auditoría del cambio de contraseña (US-011) ─────────────────────
+
+
+async def _sembrar_usuario_con_password(
+    sesion_db: AsyncSession, email: str, password: str
+) -> Usuario:
+    """Siembra un usuario con contraseña verificable (bcrypt real)."""
+    usuario = Usuario(
+        email=email,
+        nombre="Usuario Password",
+        password_hash=await hash_password(password, COSTO_BCRYPT_PREDETERMINADO),
+    )
+    sesion_db.add(usuario)
+    await sesion_db.commit()
+    return usuario
+
+
+async def test_cambiar_password_escribe_evento_del_cambio(sesion_db: AsyncSession) -> None:
+    """Un cambio exitoso deja `cambio_password` con el email del usuario como actor (US-011)."""
+    usuario = await _sembrar_usuario_con_password(
+        sesion_db, "usuario@taller.com", "actual-2026"
+    )
+
+    roles = await servicio_usuarios.cambiar_password(
+        sesion_db,
+        usuario,
+        EntradaCambioPassword(
+            password_actual="actual-2026", password_nueva="nueva-2026"
+        ),
+        COSTO_BCRYPT_PREDETERMINADO,
+    )
+
+    assert roles == []
+    eventos = list((await sesion_db.execute(select(EventoSeguridad))).scalars().all())
+    assert len(eventos) == 1
+    assert eventos[0].actor == "usuario@taller.com"
+    assert eventos[0].accion.startswith("cambio_password")
+
+    guardado = (
+        await sesion_db.execute(
+            select(Usuario)
+            .where(Usuario.email == "usuario@taller.com")
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    assert await verificar_password("nueva-2026", guardado.password_hash)
+    assert guardado.debe_cambiar_password is False
+
+
+async def test_cambiar_password_rechazado_no_escribe_evento(sesion_db: AsyncSession) -> None:
+    """Con la contraseña actual incorrecta no se modifica nada ni se audita (RN-07)."""
+    usuario = await _sembrar_usuario_con_password(
+        sesion_db, "usuario@taller.com", "actual-2026"
+    )
+
+    with pytest.raises(servicio_usuarios.ContrasenaActualIncorrecta):
+        await servicio_usuarios.cambiar_password(
+            sesion_db,
+            usuario,
+            EntradaCambioPassword(
+                password_actual="equivocada-2026", password_nueva="nueva-2026"
+            ),
+            COSTO_BCRYPT_PREDETERMINADO,
+        )
+
+    eventos = list((await sesion_db.execute(select(EventoSeguridad))).scalars().all())
+    assert eventos == []
 
 

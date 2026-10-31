@@ -20,8 +20,9 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.paginacion import PaginaDe, ParametrosPagina, construir_pagina
 from app.core.security import hash_password, obtener_hash_ficticio, verificar_password
-from app.modules.usuarios.models import AsignacionRol, Usuario
+from app.modules.usuarios.models import AsignacionRol, EventoSeguridad, Usuario
 from app.modules.usuarios.repository import (
     RepositorioIntentos,
     RepositorioUsuarios,
@@ -445,7 +446,33 @@ async def cambiar_password(
                 "debe_cambiar_password": False,
             },
         )
+        # Auditoría en la MISMA transacción del cambio (design.md, decisión 2):
+        # el actor es el propio usuario que cambió su contraseña (US-011).
+        await uow.eventos.registrar(usuario.email, ACCION_CAMBIO_PASSWORD)
         # El instante del cambio quedó anotado ANTES de emitir el token nuevo
         # (Flujo 3, paso 3): el token que devolverá esta petición sale después.
 
     return await roles_vigentes_de(sesion, _exigir_id(usuario_actualizado))
+
+
+async def listar_eventos(
+    uow: UoWUsuarios,
+    parametros: ParametrosPagina,
+) -> PaginaDe[EventoSeguridad]:
+    """Consulta paginada de `evento_seguridad`, del más reciente al más antiguo (US-011).
+
+    Args:
+        uow: transacción de usuarios abierta por el router (patrón de listados).
+        parametros: `page`/`size` ya validados por `ParametrosPagina` (422 propio).
+
+    Returns:
+        La página de eventos con el envoltorio estándar; `construir_pagina` rechaza
+        con 422 una página mayor a la última disponible.
+
+    Raises:
+        HTTPException(422): página inexistente (mensaje propio de `construir_pagina`).
+    """
+    items, total = await uow.eventos.buscar_paginado(
+        offset=parametros.desplazamiento, limit=parametros.size
+    )
+    return construir_pagina(list(items), total=total, parametros=parametros)

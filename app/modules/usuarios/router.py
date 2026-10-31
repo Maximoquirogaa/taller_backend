@@ -30,6 +30,7 @@ from app.core.mensajes_auth import (
     MENSAJE_SESION_CERRADA,
     NOMBRE_COOKIE_SESION,
 )
+from app.core.paginacion import PaginaDe, ParametrosPagina
 from app.core.security import crear_token_acceso
 from app.modules.usuarios import service as servicio_usuarios
 from app.modules.usuarios.schemas import (
@@ -39,6 +40,7 @@ from app.modules.usuarios.schemas import (
     EntradaLogin,
     EntradaRegistro,
     SalidaAsignacionRol,
+    SalidaEvento,
     SalidaLogin,
     SalidaRegistro,
     SalidaLogout,
@@ -349,3 +351,89 @@ async def otorgar_rol(
             detail=servicio_usuarios.MENSAJE_ROL_YA_ASIGNADO,
         ) from exc
     return SalidaAsignacionRol.model_validate(asignacion)
+
+
+@router_usuarios.delete(
+    "/usuarios/{id}/roles/{rol}",
+    response_model=SalidaAsignacionRol,
+    dependencies=[Depends(requiere_rol(ROLES_ADMIN))],
+)
+async def revocar_rol(
+    id: int,
+    rol: str,
+    sesion: Annotated[AsyncSession, Depends(get_session)],
+    usuario: Annotated[UsuarioAutenticado, Depends(usuario_actual)],
+) -> SalidaAsignacionRol:
+    """US-010/RN-04/RN-05: cierra la asignación abierta escribiendo `revocada_en`.
+
+    Args:
+        id: usuario afectado por la revocación.
+        rol: rol del catálogo a revocar.
+        sesion: sesión de la petición (el servicio abre la transacción del UoW).
+        usuario: ADMIN autenticado; su id habilita la autoprotección de RN-05 y su
+            email va al evento de auditoría (US-011).
+
+    Returns:
+        La asignación revocada, con `revocada_en` escrito y `desde` conservado.
+
+    Raises:
+        HTTPException(409): el ADMIN intenta revocar su propio ADMIN (RN-05).
+        HTTPException(404): usuario inexistente o rol sin asignación abierta
+            (inexistente, ya revocado o vencido): no se escribe evento.
+    """
+    try:
+        asignacion = await servicio_usuarios.revocar_rol(
+            UoWUsuarios(sesion),
+            id,
+            rol,
+            actor_id=usuario.id,
+            actor_email=usuario.usuario.email,
+        )
+    except servicio_usuarios.AutorrevocacionProhibida as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    except servicio_usuarios.RolNoVigente as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except servicio_usuarios.UsuarioNoEncontrado as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    return SalidaAsignacionRol.model_validate(asignacion)
+
+
+@router_usuarios.get(
+    "/eventos",
+    response_model=PaginaDe[SalidaEvento],
+    dependencies=[Depends(requiere_rol(ROLES_ADMIN))],
+)
+async def listar_eventos(
+    sesion: Annotated[AsyncSession, Depends(get_session)],
+    parametros: Annotated[ParametrosPagina, Depends()],
+) -> PaginaDe[SalidaEvento]:
+    """US-011: auditoría de seguridad paginada, solo para ADMIN vigente.
+
+    Args:
+        sesion: sesión de la petición (el router abre la transacción del UoW).
+        parametros: `page`/`size` validados por `ParametrosPagina` (422 propio).
+
+    Returns:
+        El envoltorio `{items, total, page, size, pages}` con los eventos del más
+        reciente al más antiguo.
+
+    Raises:
+        HTTPException(403): usuario sin rol ADMIN vigente.
+        HTTPException(422): `page`/`size` inválidos (contrato) o página inexistente
+            (mensaje propio de `construir_pagina`), sin consultar la tabla.
+    """
+    async with UoWUsuarios(sesion) as uow:
+        pagina = await servicio_usuarios.listar_eventos(uow, parametros)
+    return PaginaDe[SalidaEvento](
+        items=[SalidaEvento.model_validate(evento) for evento in pagina.items],
+        total=pagina.total,
+        page=pagina.page,
+        size=pagina.size,
+        pages=pagina.pages,
+    )
