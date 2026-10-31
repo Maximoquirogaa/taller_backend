@@ -16,6 +16,23 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.paginacion import ParametrosPagina
+
+
+class ConsultaRepuestos(ParametrosPagina):
+    """Parámetros de query del catálogo: paginación + búsqueda por texto (US-017).
+
+    `q` viaja dentro del mismo modelo a propósito: FastAPI solo expande un
+    modelo de query cuando es el **único** parámetro de la ruta (si se declara
+    `q` aparte, `page`/`size` dejan de expandirse y la ruta responde 422).
+    """
+
+    q: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Búsqueda por código o descripción.",
+    )
+
 
 class EntradaCrearRepuesto(BaseModel):
     """Contrato de entrada para dar de alta una nueva pieza en el catálogo."""

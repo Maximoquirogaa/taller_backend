@@ -23,6 +23,15 @@ from app.modules.repuestos.models import (
     Repuesto,
 )
 
+# Normalización de acentos para la búsqueda por texto: la comparación se hace
+# sobre la columna traducida en SQL y sobre el patrón normalizado en Python, con
+# la misma tabla. `translate` evita depender de la extensión `unaccent`.
+_ACENTOS = "áàäâãéèëêíìïîóòöôõúùüûñç"
+_SIN_ACENTOS = "aaaaaeeeeiiiiooooouuuunc"
+_TABLA_ACENTOS = str.maketrans(
+    _ACENTOS + _ACENTOS.upper(), _SIN_ACENTOS + _SIN_ACENTOS.upper()
+)
+
 
 class RepositorioRepuestos(SoftDeleteRepository[Repuesto]):
     """Acceso a la tabla `repuesto`: catálogo, unicidad de código activo y búsqueda segura."""
@@ -52,11 +61,17 @@ class RepositorioRepuestos(SoftDeleteRepository[Repuesto]):
         """
         filtros = [Repuesto.borrado_en.is_(None)]
         if q and q.strip():
-            patron = f"%{q.strip()}%"
+            patron = f"%{q.strip().translate(_TABLA_ACENTOS).lower()}%"
             filtros.append(
                 or_(
-                    Repuesto.codigo.ilike(patron),
-                    Repuesto.descripcion.ilike(patron),
+                    func.lower(Repuesto.codigo).like(patron),
+                    func.lower(
+                        func.translate(
+                            Repuesto.descripcion,
+                            _ACENTOS + _ACENTOS.upper(),
+                            _SIN_ACENTOS + _SIN_ACENTOS.upper(),
+                        )
+                    ).like(patron),
                 )
             )
 

@@ -19,9 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.core.dependencies import UsuarioAutenticado, requiere_rol, usuario_actual
-from app.core.paginacion import PaginaDe, ParametrosPagina
+from app.core.paginacion import PaginaDe
 from app.modules.repuestos import service as servicio_repuestos
 from app.modules.repuestos.schemas import (
+    ConsultaRepuestos,
     EntradaActualizarRepuesto,
     EntradaCrearRepuesto,
     EntradaReponerStock,
@@ -44,13 +45,12 @@ ROLES_CONSULTA = ("ADMIN", "RECEPCION", "MECANICO")
 )
 async def listar_repuestos(
     session: Annotated[AsyncSession, Depends(get_session)],
-    parametros: Annotated[ParametrosPagina, Query()],
-    q: str | None = Query(default=None, description="Búsqueda por código o descripción."),
+    consulta: Annotated[ConsultaRepuestos, Query()],
 ) -> PaginaDe[SalidaRepuesto]:
     """Consulta el catálogo de repuestos activos con búsqueda y paginación (US-017)."""
     async with UoWRepuestos(session) as uow:
         pagina = await servicio_repuestos.buscar_repuestos_paginado(
-            uow, q=q, parametros=parametros
+            uow, q=consulta.q, parametros=consulta
         )
         return PaginaDe[SalidaRepuesto](
             items=[SalidaRepuesto.model_validate(r) for r in pagina.items],
