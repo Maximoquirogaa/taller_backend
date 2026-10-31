@@ -49,6 +49,28 @@ class RepositorioRepuestos(SoftDeleteRepository[Repuesto]):
         resultado = await self.session.execute(consulta)
         return resultado.scalars().first()
 
+    async def get_activos_por_ids(self, ids: list[int]) -> Sequence[Repuesto]:
+        """Devuelve los repuestos activos cuyos ids se piden, en una sola consulta.
+
+        Se excluyen los dados de baja lógica; se usa para validar en una sola
+        ida que todos los repuestos de una orden existan y estén vigentes (D4).
+
+        Args:
+            ids: identificadores de repuesto a recuperar.
+
+        Returns:
+            Lista de `Repuesto` activos entre los ids pedidos (posiblemente
+            vacía si ninguno coincide).
+        """
+        if not ids:
+            return []
+        consulta = select(Repuesto).where(
+            Repuesto.id.in_(tuple(ids)),
+            Repuesto.borrado_en.is_(None),
+        )
+        resultado = await self.session.execute(consulta)
+        return list(resultado.scalars().all())
+
     async def buscar_catalogo(
         self,
         q: str | None = None,

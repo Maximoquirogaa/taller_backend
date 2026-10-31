@@ -247,7 +247,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ## FASE 3 — Órdenes de trabajo
 
 ### [C-07] `ordenes-crud`
-- **Estado**: [ ] pendiente
+- **Estado**: `[x]` completado (archivado 2026-10-31)
 - **Scope**: Modelo de órdenes (composición + catálogo de estados) con apertura, listado y detalle
   - Modelos: `EstadoOrden` (PK = `codigo`, `posicion` UNIQUE, `es_final`), `OrdenTrabajo`, `ItemOrden`, `HistorialEstadoOrden`
   - `ItemOrden`: **UNIQUE** `(orden_id, repuesto_id)` — composición, sin repetidos; `precio_unitario` copiado del repuesto (RN-10)
