@@ -153,6 +153,5 @@ Todas las cuentas usan la misma contraseña de demostración: **`Taller2026`**
 
 - **C-14**: salida de `psql -f test/solo_agregado.sql` (7 rechazos) — capturar en `docs/evidencias/C-14.png` o `.txt`.
 - **C-15**: detalle de orden con 2 y 4 ítems emite el mismo número de consultas SQL (`SQL_ECHO=true`) — capturar en `docs/evidencias/C-15.png` o `.txt`.
-- **C-16**: `GET /repuestos?q=` con intento de inyección → 200, `items:[]`, `total:0`, sin 500 (ver caso C-16 en `test/c-15-a-c-19-repuestos-ordenes.http`).
 
 Pasos de levantamiento completos: venv → deps → `.env` → `alembic upgrade head` → `python seed.py` → servidor (`uvicorn main:app --port 8000`) → pruebas.
