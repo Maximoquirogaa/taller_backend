@@ -269,7 +269,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ---
 
 ### [C-08] `ordenes-lifecycle`
-- **Estado**: `[x]` completado (2026-10-31)
+- **Estado**: `[x]` completado (archivado 2026-10-31)
 - **Scope**: Máquina de estados de la orden con la transacción crítica de stock
   - `POST /ordenes/{id}/iniciar` — MECANICO; PENDIENTE → EN_REPARACION con `mecanico_id` = yo; 409 si el estado no lo permite; línea de historial (US-026, RN-11)
   - `POST /ordenes/{id}/terminar` — mecánico asignado **o** ADMIN (ruta sin `requiere_rol` simple); en **un solo UoW**: verificar permiso y estado → chequear stock de cada ítem → si alguno no alcanza, lanzar y revertir **todo** (409, sin escrituras parciales, ejercicio C-11 de la consigna) → descontar stock + `movimiento_stock` por salida → estado TERMINADA + historial; tras confirmar, aviso con `BackgroundTasks` (`asyncio.sleep(0.5)` + log) (US-027, RN-13, RN-14)
