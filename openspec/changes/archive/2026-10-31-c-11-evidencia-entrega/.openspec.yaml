@@ -1,0 +1,8 @@
+schema: spec-driven
+created: 2026-10-31
+goal: Dejar el entregable con exactamente dos migraciones (001_esquema_inicial +
+  002_disparador_solo_agregado), verificar upgrade/downgrade/reproducibilidad,
+  generar la suite .http de los casos C-01..C-19 con respuestas esperadas,
+  capturar evidencias C-14 (solo_agregado.sql), C-15 (detalle de orden 2 vs 4
+  items, mismas consultas) y C-16 (q con injection -> lista vacia, total 0, sin
+  500), y escribir el README de entrega con credenciales ficticias Taller2026

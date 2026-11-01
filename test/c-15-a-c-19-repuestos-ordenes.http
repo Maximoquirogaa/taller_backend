@@ -1,0 +1,190 @@
+### ============================================================================
+# Suite HTTP de entrega — Casos ejercicio C-15 a C-19 (repuestos, órdenes, estados, mis-ordenes)
+# Endpoints: GET /ordenes/{id}, GET /repuestos?q=, POST /ordenes, GET /estados-orden, GET /mis-ordenes
+#
+# PRECONDICIÓN: servidor en puerto 8000, base sembrada (python seed.py), y la
+# variable @access_token cargada con el token de login de admin@example.com
+# (caso C-04 del archivo c-01-a-c-08-salud-auth.http).
+#
+# IDs de seed (predecibles tras `python seed.py`, que usa TRUNCATE ... RESTART IDENTITY):
+#   orden id=1 (AB123CD, PENDIENTE, 1 ítem: filtro aceite ×1)
+#   orden id=2 (AC789HI, EN_REPARACION, mecánico asignado, 1 ítem: bujía ×4, stock 2 → insuficiente)
+#   repuesto id=1 (FIL-001, $8500.00, stock 10), id=3 (BUJ-001, $3500.00, stock 2)
+#   vehículo id=1 (AB123CD, Laura), id=3 (AC789HI, Jorge)
+# ============================================================================
+
+
+### C-15 GET /ordenes/{id} — esperado: 200 SalidaOrdenDetalle (sin N+1, verif. ejercicio C-15)
+# Detalle de orden con ítems, repuesto, vehículo, cliente e historial.
+# Verificación C-15 (consigna): con SQL_ECHO=true, GET /ordenes/1 (2 ítems) y
+# GET /ordenes/2 (4 ítems) deben emitir el MISMO número de consultas SELECT
+# (el detalle precarga todo en el repositorio: no crece con la cantidad de ítems).
+GET http://localhost:8000/ordenes/2
+Cookie: access_token={{access_token}}
+
+# Respuesta esperada: 200
+#   {
+#     "id": 2, "estado": "EN_REPARACION", "mecanico_id": 4, "falla": "Cambio de bujías y puesta a punto",
+#     "creada_en": "<...>", "total": "14000.00",
+#     "vehiculo": { "id": 3, "patente": "AC789HI" },
+#     "cliente": { "id": 2, "nombre": "Jorge Pérez", "documento": "27888999", "telefono": "11-5555-0202" },
+#     "items": [
+#       { "id": 2, "repuesto_id": 3, "repuesto": { "id": 3, "codigo": "BUJ-001" },
+#         "cantidad": 4, "precio_unitario": "3500.00", "subtotal": "14000.00" }
+#     ],
+#     "historial": [
+#       { "id": 1, "desde_estado": null, "hasta_estado": "PENDIENTE", "usuario_id": null, "cuando": "<...>" },
+#       { "id": 2, "desde_estado": "PENDIENTE", "hasta_estado": "EN_REPARACION", "usuario_id": 4, "cuando": "<...>" }
+#     ]
+#   }
+# Orden inexistente → 404; orden de cliente ajeno (CLIENTE sin ser dueño) → 403.
+# (Repetir con GET /ordenes/1 para el orden de 1 ítem y comparar la cantidad de SELECT en consola.)
+
+
+### C-16 GET /repuestos?q= con intento de inyección — esperado: 200 {items:[], total:0} sin 500 (RN-18)
+# Búsqueda por texto con parámetros ligados: un intento de inyección SQL no debe
+# devolver filas ni error 500 (RN-18). Rol requerido: ADMIN/RECEPCION/MECANICO.
+GET http://localhost:8000/repuestos?q='; DROP TABLE repuesto; --
+Cookie: access_token={{access_token}}
+
+# Respuesta esperada: 200
+#   { "items": [], "total": 0, "page": 1, "size": 20, "pages": 0 }
+# No debe haber 500 ni error interno de PostgreSQL expuesto al cliente.
+# Búsqueda válida, ej. q=filtro → 200 con items que coincidan y total > 0.
+
+
+### C-17 POST /ordenes — esperado: 201 SalidaOrdenDetalle (orden abierta, precios copiados, total del servidor)
+# Abrir orden (RECEPCION/ADMIN): contrato sin precio/total/estado; el servidor
+# copia precios y calcula el total (RN-10). Historial null → PENDIENTE (RN-19).
+POST http://localhost:8000/ordenes
+Content-Type: application/json
+Cookie: access_token={{access_token}}
+
+{
+  "vehiculo_id": 1,
+  "falla": "Ruido en el motor al arrancar",
+  "items": [
+    { "repuesto_id": 1, "cantidad": 1 },
+    { "repuesto_id": 4, "cantidad": 2 }
+  ]
+}
+
+# Respuesta esperada: 201
+#   {
+#     "id": <nuevo>, "estado": "PENDIENTE", "mecanico_id": null,
+#     "falla": "Ruido en el motor al arrancar", "creada_en": "<...>",
+#     "total": "13500.00",   # 8500.00 + 2×2500.00
+#     "vehiculo": { "id": 1, "patente": "AB123CD" },
+#     "cliente": { "id": 1, "nombre": "Laura Gómez", "documento": "30111222", "telefono": "11-5555-0101" },
+#     "items": [
+#       { "id": ..., "repuesto_id": 1, "repuesto": { "id": 1, "codigo": "FIL-001" },
+#         "cantidad": 1, "precio_unitario": "8500.00", "subtotal": "8500.00" },
+#       { "id": ..., "repuesto_id": 4, "repuesto": { "id": 4, "codigo": "ACE-001" },
+#         "cantidad": 2, "precio_unitario": "2500.00", "subtotal": "5000.00" }
+#     ],
+#     "historial": [ { "id": ..., "desde_estado": null, "hasta_estado": "PENDIENTE", ... } ]
+#   }
+# Sin ítems o repetidos → 422/409; catálogo de estados vacío → 409; vehículo inexistente → 404.
+
+
+### C-18 GET /estados-orden — esperado: 200 [{codigo, descripcion, posicion, es_final}] (4 estados por posición)
+# Catálogo de estados de orden (US-029, RN-19). Cualquier usuario autenticado.
+GET http://localhost:8000/estados-orden
+Cookie: access_token={{access_token}}
+
+# Respuesta esperada: 200
+#   [
+#     { "codigo": "PENDIENTE", "descripcion": "Pendiente de reparación", "posicion": 1, "es_final": false },
+#     { "codigo": "EN_REPARACION", "descripcion": "En reparación", "posicion": 2, "es_final": false },
+#     { "codigo": "TERMINADA", "descripcion": "Terminada", "posicion": 3, "es_final": true },
+#     { "codigo": "CANCELADA", "descripcion": "Cancelada", "posicion": 4, "es_final": true }
+#   ]
+# Sin sesión → 401.
+
+
+### C-19 GET /mis-ordenes — esperado: 200 {items:[...], total, page, size, pages} (solo órdenes propias)
+# Órdenes de los vehículos del cliente autenticado, paginadas (US-030, RN-17).
+# Requiere loguearse como cliente@example.com (dueño de los vehículos de Laura).
+GET http://localhost:8000/mis-ordenes?page=1&size=20
+Cookie: access_token={{access_token_cliente}}
+
+# Respuesta esperada: 200
+#   {
+#     "items": [ { "id": 1, "vehiculo_id": 1, "patente": "AB123CD",
+#                  "falla": "Ruido en el motor al arrancar", "estado": "PENDIENTE",
+#                  "creada_en": "<...>", "total": "8500.00" } ],
+#     "total": 1, "page": 1, "size": 20, "pages": 1
+#   }
+# Un cliente solo ve sus propias órdenes (RN-17); orden ajena → 403 en detalle.
+
+
+### ============================================================================
+# Casos adicionales documentados (no numerados C-NN) — cobertura de endpoints restantes
+# ============================================================================
+
+### POST /repuestos — esperado: 201 {id, codigo, descripcion, precio, stock} + movimiento "Stock inicial"
+POST http://localhost:8000/repuestos
+Content-Type: application/json
+Cookie: access_token={{access_token}}
+
+{
+  "codigo": "LLA-001",
+  "descripcion": "Llave de filtro",
+  "precio": "4500.00",
+  "stock_inicial": 5
+}
+
+# Respuesta esperada: 201; código repetido vigente → 409; precio ≤ 0 → 422.
+
+
+### POST /repuestos/{id}/reponer — esperado: 200 {.., stock: <nuevo>} + movimiento de reposición
+POST http://localhost:8000/repuestos/3/reponer
+Content-Type: application/json
+Cookie: access_token={{access_token}}
+
+{
+  "cantidad": 10,
+  "motivo": "Reposición de prueba"
+}
+
+# Respuesta esperada: 200 con stock aumentado (2 → 12) y un nuevo movimiento_stock.
+
+
+### GET /repuestos/{id}/movimientos — esperado: 200 [lista de movimientos]
+GET http://localhost:8000/repuestos/1/movimientos
+Cookie: access_token={{access_token}}
+
+# Respuesta esperada: 200 con los movimientos del repuesto (incluye el alta inicial de seed).
+# Repuesto inexistente → 404.
+
+
+### GET /repuestos/{id}/precios — esperado: 200 [historial de precios]
+GET http://localhost:8000/repuestos/1/precios
+Cookie: access_token={{access_token}}
+
+# Respuesta esperada: 200 con al menos la línea 8000.00 → 8500.00 del seed.
+
+
+### POST /ordenes/{id}/iniciar — esperado: 200 (PENDIENTE → EN_REPARACION, mecánico asignado)
+POST http://localhost:8000/ordenes/1/iniciar
+Cookie: access_token={{access_token_mecanico}}
+
+# Respuesta esperada: 200 con estado EN_REPARACION y mecanico_id = id del mecánico.
+# Requiere rol MECANICO vigente; estado no válido → 409; inexistente → 404.
+
+
+### POST /ordenes/{id}/terminar — esperado: 200 (stock descontado, movimientos + historial, 1 solo UoW)
+# Orden id=2 pide 4 bujías con stock 2 → stock insuficiente → 409 SIN escrituras parciales (ejercicio C-11).
+POST http://localhost:8000/ordenes/2/terminar
+Cookie: access_token={{access_token_mecanico}}
+
+# Respuesta esperada: 409 { "detail": "Stock insuficiente..." } y nada cambió (stock, movimientos, historial intactos).
+# Para una orden con stock suficiente → 200, estado TERMINADA, movimientos de salida, historial.
+
+
+### POST /ordenes/{id}/cancelar — esperado: 200 (PENDIENTE → CANCELADA + historial)
+POST http://localhost:8000/ordenes/1/cancelar
+Cookie: access_token={{access_token_recepcion}}
+
+# Respuesta esperada: 200 con estado CANCELADA.
+# Orden ajena → 403 (antes de mirar el estado, RN-12); terminada → 409.

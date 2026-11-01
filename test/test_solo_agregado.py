@@ -249,5 +249,12 @@ async def test_estado_fuera_del_catalogo_rechazado_por_la_fk(
 
     await sesion.rollback()
 
-    assert "estado_orden" in str(excinfo.value) or "foreign key" in str(excinfo.value).lower()
+    mensaje = str(excinfo.value).lower()
+    # El mensaje de PostgreSQL está localizado (acá sale en español): se acepta
+    # el nombre de la restricción o cualquiera de las dos formas del error.
+    assert (
+        "orden_trabajo_estado_fkey" in mensaje
+        or "foreign key" in mensaje
+        or "llave foránea" in mensaje
+    )
     assert await _contar(sesion, "orden_trabajo") == 1

@@ -1,0 +1,123 @@
+### ============================================================================
+# Suite HTTP de entrega — Casos ejercicio C-09 a C-14 (usuarios, roles, eventos, clientes, vehículos)
+# Endpoints: POST /usuarios, POST/DELETE /usuarios/{id}/roles, GET /eventos,
+#            POST /clientes, POST /clientes/{id}/vehiculos, GET /mis-vehiculos
+#
+# PRECONDICIÓN: servidor en puerto 8000, base sembrada (python seed.py), y la
+# variable @access_token cargada con el token de login de admin@example.com
+# (caso C-04 del archivo c-01-a-c-08-salud-auth.http).
+#
+# Todas estas rutas están en el grupo protegido: requieren cookie HttpOnly y
+# rol ADMIN vigente (consultado en la base en cada petición, RN-04).
+# ============================================================================
+
+
+### C-09 POST /usuarios — esperado: 201 {id, email, nombre, activo, debe_cambiar_password}
+# Alta de personal por ADMIN con contraseña provisoria (US-008).
+POST http://localhost:8000/usuarios
+Content-Type: application/json
+Cookie: access_token={{access_token}}
+
+{
+  "email": "empleado@example.com",
+  "nombre": "Empleado de Prueba",
+  "password": "PruebaEmpleado9"
+}
+
+# Respuesta esperada: 201
+#   { "id": <nuevo>, "email": "empleado@example.com", "nombre": "Empleado de Prueba",
+#     "activo": true, "debe_cambiar_password": true }
+# Email duplicado → 409; contrato inválido → 422; sin rol ADMIN → 403.
+
+
+### C-10 POST /usuarios/{id}/roles — esperado: 201 {id, usuario_id, rol, desde, vence_en, revocada_en, otorgada_por}
+# Otorgar rol con vigencia (US-009). `vencimiento` opcional, con zona horaria y futuro.
+POST http://localhost:8000/usuarios/8/roles
+Content-Type: application/json
+Cookie: access_token={{access_token}}
+
+{
+  "rol": "RECEPCION",
+  "vence_en": "2027-12-31T23:59:59-03:00"
+}
+
+# Respuesta esperada: 201
+#   { "id": <nuevo>, "usuario_id": 8, "rol": "RECEPCION",
+#     "desde": "<ahora>", "vence_en": "2027-12-31T23:59:59-03:00",
+#     "revocada_en": null, "otorgada_por": <id admin> }
+# Rol ya abierto → 409 (RN-03); usuario inexistente → 404; vencimiento pasado/sin zona → 422.
+
+
+### C-11 DELETE /usuarios/{id}/roles/{rol} — esperado: 200 {rol revocado con revocada_en}
+# Revocar rol (escribe revocada_en, nunca borra la fila) — US-010, RN-04/RN-05.
+DELETE http://localhost:8000/usuarios/8/roles/RECEPCION
+Cookie: access_token={{access_token}}
+
+# Respuesta esperada: 200
+#   { "id": <asignacion>, "usuario_id": 8, "rol": "RECEPCION", "desde": "<...>",
+#     "vence_en": null, "revocada_en": "<ahora>", "otorgada_por": <id admin> }
+# Revocar su propio ADMIN → 409 (RN-05); rol sin asignación abierta → 404.
+
+
+### C-12 GET /eventos — esperado: 200 {items:[...], total, page, size, pages}
+# Auditoría de seguridad paginada, solo ADMIN (US-011).
+GET http://localhost:8000/eventos?page=1&size=20
+Cookie: access_token={{access_token}}
+
+# Respuesta esperada: 200
+#   { "items": [ { "id": 1, "cuando": "<...>", "actor": "SISTEMA",
+#                  "accion": "Carga de los datos iniciales" }, ... ],
+#     "total": 1, "page": 1, "size": 20, "pages": 1 }
+# page/size inválidos → 422; sin rol ADMIN → 403.
+
+
+### C-13 POST /clientes — esperado: 201 {id, usuario_id, nombre, documento, telefono}
+# Alta de cliente de mostrador (sin usuario web) — RECEPCION/ADMIN (US-012).
+POST http://localhost:8000/clientes
+Content-Type: application/json
+Cookie: access_token={{access_token}}
+
+{
+  "nombre": "María López",
+  "documento": "33444555",
+  "telefono": "11-5555-0303"
+}
+
+# Respuesta esperada: 201
+#   { "id": <nuevo>, "usuario_id": null, "nombre": "María López",
+#     "documento": "33444555", "telefono": "11-5555-0303" }
+# Documento duplicado → 409; contrato inválido → 422.
+
+
+### C-14 POST /clientes/{id}/vehiculos — esperado: 201 {id, cliente_id, patente, marca, modelo, anio}
+# Alta de vehículo asociado a un cliente — RECEPCION/ADMIN (US-013).
+# Se usa el cliente creado en C-13 (id <nuevo>); acá se asume id 3 como ejemplo.
+POST http://localhost:8000/clientes/3/vehiculos
+Content-Type: application/json
+Cookie: access_token={{access_token}}
+
+{
+  "patente": "ZZ999WW",
+  "marca": "Volkswagen",
+  "modelo": "Gol",
+  "anio": 2020
+}
+
+# Respuesta esperada: 201
+#   { "id": <nuevo>, "cliente_id": 3, "patente": "ZZ999WW", "marca": "Volkswagen",
+#     "modelo": "Gol", "anio": 2020 }
+# Cliente inexistente → 404; patente vigente repetida → 409; año fuera de 1950-2100 → 422.
+
+
+### Caso adicional (sin número C-NN) GET /mis-vehiculos — esperado: 200 [lista de vehículos propios]
+# Solo los vehículos del cliente vinculado al usuario autenticado (RN-17).
+# Requiere loguearse como cliente@example.com (tiene ficha de cliente y 2 vehículos).
+GET http://localhost:8000/mis-vehiculos
+Cookie: access_token={{access_token_cliente}}
+
+# Respuesta esperada: 200
+#   [ { "id": 1, "cliente_id": <cliente laura>, "patente": "AB123CD", "marca": "Toyota",
+#       "modelo": "Corolla", "anio": 2019 },
+#     { "id": 2, "cliente_id": <cliente laura>, "patente": "AE456FG", "marca": "Ford",
+#       "modelo": "Fiesta", "anio": 2015 } ]
+# Un usuario sin ficha de cliente → 200 con lista vacía.

@@ -34,7 +34,7 @@ Durante el desarrollo (C-02…C-09) cada change genera su migración **increment
 
 1. Base nueva vacía → borrar `migrations/versions/*` → `alembic revision --autogenerate -m "esquema inicial"` con todos los modelos importados en `env.py`.
 2. Renumerar a `002` la migración del disparador creada en C-09 (ajustar `down_revision`); **no** se regenera: se conserva tal cual.
-3. Verificar desde cero: `alembic upgrade head` → `alembic check` sin diferencias → `alembic downgrade base` → `upgrade head` otra vez → `test/solo_agregado.sql` en verde → `python seed.py` → suite `pytest` completa.
+3. Verificar desde cero: `alembic upgrade head` → `alembic check` sin diferencias → `alembic downgrade base` → `upgrade head` otra vez → `python seed.py` → `test/solo_agregado.sql` en verde → suite `pytest` completa.
 
 > **Regla**: ninguna migración de desarrollo sobrevive a C-11. Si apareciera una diferencia entre modelos y esquema, se corrige el **modelo** y se repite la consolidación — nunca un `ALTER` suelto a mano (salvo el disparador, que por definición va a mano).
 
@@ -309,7 +309,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ## FASE 5 — Estado inicial y entrega
 
 ### [C-10] `seed-inicial`
-- **Estado**: [ ] pendiente
+- **Estado**: `[x]` completado (archivado 2026-10-31)
 - **Scope**: `seed.py` que deja la base en el estado inicial conocido
   - Vacía tablas y carga en orden: catálogo `estado_orden` (PENDIENTE, EN_REPARACION, TERMINADA final, CANCELADA final) **primero**; usuarios (admin@, admin2@, recepcion@, mecánicos, cliente@, nuevo@ con cambio obligatorio); clientes (Laura con usuario + 2 vehículos, Jorge sin usuario + 1 vehículo); repuestos (4 piezas con stock inicial como movimiento); órdenes (una PENDIENTE, una EN_REPARACION asignada pidiendo 4 bujías con stock 2 — caso de stock insuficiente); historial de precios 8000→8500; `evento_seguridad` de `SISTEMA` «Carga de los datos iniciales»
   - Contraseñas ficticias solo en `seed.py`, nunca como secretos reales en el repo
@@ -326,13 +326,13 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ---
 
 ### [C-11] `evidencia-entrega`
-- **Estado**: [ ] pendiente
+- **Estado**: `[x]` completado (archivado 2026-10-31)
 - **Scope**: **Consolidación de migraciones** + suite HTTP de la consigna + evidencias + README de entrega
-  - **Consolidar el esquema en las dos migraciones del entregable** (ver §Estrategia de migraciones): borrar `migrations/versions/*` → `alembic revision --autogenerate -m "esquema inicial"` sobre base vacía con todos los modelos importados en `env.py` → renumerar a `002` la migración del disparador de C-09 (ajustar `down_revision`, conservarla tal cual) → verificar `upgrade head` → `alembic check` sin diferencias → `downgrade base` → `upgrade head` → `solo_agregado.sql` → `python seed.py` → `pytest`
+  - **Consolidar el esquema en las dos migraciones del entregable** (ver §Estrategia de migraciones): borrar `migrations/versions/*` → `alembic revision --autogenerate -m "esquema inicial"` sobre base vacía con todos los modelos importados en `env.py` → renumerar a `002` la migración del disparador de C-09 (ajustar `down_revision`, conservarla tal cual) → verificar `upgrade head` → `alembic check` sin diferencias → `downgrade base` → `upgrade head` → `python seed.py` → `solo_agregado.sql` → capturas C-14/C-15 → `pytest`
   - `test/*.http` con los casos ejercicio C-01…C-19 de la consigna, cada uno con la respuesta esperada; login con `# @no-cookie-jar` y captura del `Set-Cookie` (DD-04)
   - Verificación del ejercicio C-15: detalle de orden con 2 y 4 ítems → mismas consultas (SQL_ECHO en dev); ejercicio C-16: `q` con intento de injection → lista vacía, total 0, sin 500 (RN-18)
   - Evidencia de C-14 (`solo_agregado.sql`) en consola o fragmento según pida el docente (ver pregunta abierta de formato)
-  - `README` de entrega: cómo instalar, variables (`env.example`), migrar, seed, arrancar (uvicorn puerto 8000), ejecutar las pruebas
+  - `README` de entrega: cómo instalar, variables (`env.example`), migrar, seed, arrancar (uvicorn puerto 8000), ejecutar las pruebas, y las credenciales ficticias que deja `seed.py` (`Taller2026` y los emails de cada rol)
   - Checklist final: ninguna entrada inválida → 500; ningún error expone texto de la base (RN-18); login Bearer sin cookie → 401 (DD-04)
 - **Dependencias**: C-08, C-09, C-10
 - **Governance**: ALTO (la consolidación reescribe el historial de migraciones del entregable)

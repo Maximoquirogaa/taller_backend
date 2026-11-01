@@ -1,0 +1,130 @@
+### ============================================================================
+# Suite HTTP de entrega — Casos ejercicio C-01 a C-08 (salud + autenticación)
+# Endpoints: GET /health/live, GET /health/ready, POST /auth/{registro,login,logout,yo,cambiar-password}
+#
+# PRECONDICIÓN (una vez):
+#   1. Servidor levantado:  uvicorn main:app --port 8000
+#   2. Base sembrada:       alembic upgrade head  &&  python seed.py
+#
+# Flujo de sesión (DD-04): el JWT viaja SOLO en la cookie HttpOnly `access_token`.
+#   - El login se ejecuta con `# @no-cookie-jar` y se captura la cabecera
+#     `Set-Cookie` de la respuesta.
+#   - El valor del token (entre `access_token=` y el primer `;`) se pega en la
+#     variable `@access_token` de más abajo y se envía en `Cookie:` de las
+#     peticiones protegidas.
+#   - `Authorization: Bearer` sin cookie → 401 (ver caso C-06).
+#
+# Cada bloque ### se envía por separado (REST Client de VS Code o similar).
+# Tras cada bloque se documenta: código de estado esperado y cuerpo esperado.
+# ============================================================================
+
+# Variable de sesión: pegar acá el token de la Set-Cookie del login (caso C-04).
+@access_token = PEGAR_AQUI_EL_TOKEN_DE_ACCESS_TOKEN_DEL_LOGIN
+
+
+### C-01 GET /health/live — esperado: 200 {"estado": "vivo"}
+# Liveness: responde sin tocar la base de datos.
+GET http://localhost:8000/health/live
+
+# Respuesta esperada: 200
+#   { "estado": "vivo" }
+
+
+### C-02 GET /health/ready — esperado: 200 {"estado": "listo"}
+# Readiness: ejecuta SELECT 1 contra PostgreSQL.
+GET http://localhost:8000/health/ready
+
+# Respuesta esperada: 200
+#   { "estado": "listo" }
+
+
+### C-03 POST /auth/registro — esperado: 201 {email, nombre, rol: "CLIENTE"}
+# Auto-registro de cliente (usuario + rol CLIENTE + ficha en un solo UoW, RN-02).
+POST http://localhost:8000/auth/registro
+Content-Type: application/json
+
+{
+  "email": "juan.perez@example.com",
+  "nombre": "Juan Pérez",
+  "password": "ClaveSegura9"
+}
+
+# Respuesta esperada: 201
+#   { "email": "juan.perez@example.com", "nombre": "Juan Pérez", "rol": "CLIENTE" }
+# Email duplicado → 409; contrato inválido → 422.
+
+
+### C-04 POST /auth/login — esperado: 200 + Set-Cookie (JWT solo en cookie, DD-04)
+# @no-cookie-jar
+# @name login_admin
+# Login de admin@example.com (contraseña Taller2026). El JWT NO viaja en el cuerpo.
+POST http://localhost:8000/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@example.com",
+  "password": "Taller2026"
+}
+
+# Respuesta esperada: 200
+#   Cuerpo: { "debe_cambiar_password": false, "expira_en_segundos": 1800 }
+#   Cabecera esperada: Set-Cookie: access_token=<jwt>; HttpOnly; SameSite=Lax;
+#                      Path=/; Max-Age=1800
+# VERIFICAR DD-04:
+#   - El token JWT aparece SOLO en Set-Cookie (HttpOnly, SameSite=Lax).
+#   - El cuerpo de respuesta NO contiene el token.
+# Acción: copiar el valor del token (entre `access_token=` y el primer `;`)
+#   en la variable @access_token definida al inicio de este archivo.
+
+
+### C-05 GET /auth/yo — esperado: 200 {email, nombre, debe_cambiar_password, roles_vigentes, roles_token}
+# Requiere la cookie de sesión del login (C-04). Roles vigentes leídos de la base (RN-04).
+GET http://localhost:8000/auth/yo
+Cookie: access_token={{access_token}}
+
+# Respuesta esperada: 200
+#   {
+#     "email": "admin@example.com",
+#     "nombre": "Administrador del taller",
+#     "debe_cambiar_password": false,
+#     "roles_vigentes": ["ADMIN"],
+#     "roles_token": ["ADMIN"]
+#   }
+# Sin cookie o cookie inválida → 401.
+
+
+### C-06 GET /auth/yo con Authorization: Bearer (sin cookie) — esperado: 401 (DD-04)
+# El encabezado Authorization: Bearer es ignorado: solo se acepta la cookie HttpOnly.
+GET http://localhost:8000/auth/yo
+Authorization: Bearer cualquier-valor-invalido
+
+# Respuesta esperada: 401
+#   { "detail": "Sesión inválida o vencida: iniciá sesión de nuevo." }
+
+
+### C-07 POST /auth/logout — esperado: 200 {mensaje: "Sesión cerrada."}
+# Borra la cookie de sesión.
+POST http://localhost:8000/auth/logout
+Cookie: access_token={{access_token}}
+
+# Respuesta esperada: 200
+#   { "mensaje": "Sesión cerrada." }
+
+
+### C-08 POST /auth/cambiar-password — esperado: 200 + cookie nueva (usuario nuevo@)
+# Usuario con cambio obligatorio (debe_cambiar_password=true). Verifica la actual,
+# hashea la nueva fuera de la transacción, emite cookie nueva tras anotar el cambio (RN-07).
+POST http://localhost:8000/auth/cambiar-password
+Content-Type: application/json
+Cookie: access_token={{access_token}}
+
+{
+  "password_actual": "Taller2026",
+  "password_nueva": "Taller2026Cambiada123"
+}
+
+# Respuesta esperada: 200
+#   Cuerpo: { "debe_cambiar_password": false, "expira_en_segundos": 1800 }
+#   Cabecera esperada: Set-Cookie con una access_token nueva (válida).
+# Las cookies previas (iat < password_cambiada_en) pasan a 401 incluso en el mismo segundo.
+# Contraseña nueva fuera de política (>=72 bytes) → 422; contraseña actual incorrecta → 401.

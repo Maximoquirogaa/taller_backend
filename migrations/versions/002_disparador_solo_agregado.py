@@ -7,7 +7,7 @@ cualquier intento de modificar o borrar filas de `historial_estado_orden`,
 
 ESTA MIGRACIÓN ES ESCRITA A MANO Y NO SE AUTOGENERA. Alembic no detecta
 funciones ni disparadores, así que el autogenerate nunca la produciría ni la
-borraría. **Sobrevive a la consolidación de C-11**: allí se renombra a
+borraría. **Sobrevive a la consolidación de C-11**: allí se renumera a
 `002_disparador_solo_agregado.py` y se le ajustan `revision` y `down_revision`;
 el SQL de abajo se conserva tal cual (DD-08).
 
@@ -20,8 +20,8 @@ El `downgrade` revierte el esquema al estado anterior (sin función ni
 disparadores). `TRUNCATE` no se ve afectado: los disparadores son de fila y
 `TRUNCATE` no los activa (la limpieza de la suite depende de eso).
 
-Revision ID: 006_disparador_solo_agregado
-Revises: 005_ordenes_crud
+Revision ID: 002_disparador_solo_agregado
+Revises: 001_esquema_inicial
 Create Date: 2026-10-31 00:00:00.000000
 
 """
@@ -31,8 +31,8 @@ from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision: str = '006_disparador_solo_agregado'
-down_revision: Union[str, Sequence[str], None] = '005_ordenes_crud'
+revision: str = '002_disparador_solo_agregado'
+down_revision: Union[str, Sequence[str], None] = '001_esquema_inicial'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
