@@ -66,10 +66,14 @@ uvicorn main:app --reload --port 8000
    ```sql
    \i test/solo_agregado.sql
    ```
-   (Si el script no está armado aún, manualmente: 3× `UPDATE` y 3× `DELETE` sobre `historial_estado_orden`, `movimiento_stock` e `historial_precio_repuesto`, más un `INSERT INTO orden_trabajo ... estado='INEXISTENTE'`.)
-3. **Resultado esperado** en la misma ventana:
-   - 6× error del disparador (algo de `cannot update/delete rows from ...` / tabla protegida),
-   - 1× error de clave foránea (`violates foreign key constraint`).
+   El script ya existe (C-09) y hace los 7 casos solo, con un `\echo` por caso. **Precondición**: la base debe tener datos (`alembic upgrade head` + `python seed.py`, este último llega en C-10); con las tablas vacías el disparador de fila no se activa.
+   También se puede correr de una sin entrar a psql:
+   ```powershell
+   psql -U $env:POSTGRES_USER -d $env:POSTGRES_DB -f test/solo_agregado.sql
+   ```
+3. **Resultado esperado** en la misma ventana (exactamente 7 `ERROR:`):
+   - 6× error del disparador: `La tabla <tabla> es de sólo agregado: UPDATE|DELETE no está permitido (RN-15)`,
+   - 1× error de clave foránea: `inserción o actualización en la tabla «orden_trabajo» viola la llave foránea «orden_trabajo_estado_fkey»`.
 4. **Captura**: screenshot de la ventana de psql con los 7 rechazos visibles (podés sacarle `\echo on` o simplemente dejar que la salida se vea completa).
 5. Salí de psql (`\q`) y guardá: `docs/evidencias/C-14.png`.
 
