@@ -289,7 +289,7 @@ Paso │ Agente A (Backend Core)      │ Agente B (Backend Aux)     │ Agente 
 ## FASE 4 — Integridad en la base
 
 ### [C-09] `append-only-triggers`
-- **Estado**: [ ] pendiente
+- **Estado**: `[x]` completado (archivado 2026-10-31)
 - **Scope**: Disparador de sólo agregado instalado por migración escrita a mano + prueba SQL
   - Migración de **desarrollo** 006 **escrita a mano** (no autogenerate): función + disparadores que rechazan UPDATE y DELETE en `historial_estado_orden`, `movimiento_stock` e `historial_precio_repuesto` (RN-15); comentario explícito en la migración de que es a mano (DD-08). **Esta migración sobrevive a la consolidación**: en C-11 se renumera a `002` y se conserva tal cual
   - La migración se escribe sin depender de identificadores autogenerados (solo `op.execute` con `CREATE OR REPLACE FUNCTION` / `DROP TRIGGER IF EXISTS`), para que renumerarla sea mecánico
