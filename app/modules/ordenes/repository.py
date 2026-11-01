@@ -105,6 +105,10 @@ class RepositorioOrdenes(BaseRepository[OrdenTrabajo]):
                     HistorialEstadoOrden.hasta_estado_catalogo
                 ),
             )
+            # Refresca atributos y colecciones ya cargadas en la sesión: tras una
+            # transición dentro del mismo UoW, el detalle devuelto refleja el
+            # estado/Historial recién escritos (sin datos obsoletos en memoria).
+            .execution_options(populate_existing=True)
         )
         resultado = await self.session.execute(consulta)
         return resultado.scalars().first()

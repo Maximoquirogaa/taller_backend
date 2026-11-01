@@ -12,7 +12,7 @@ from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import event
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.modules.ordenes.models import (
@@ -20,6 +20,7 @@ from app.modules.ordenes.models import (
     ItemOrden,
     OrdenTrabajo,
 )
+from app.modules.repuestos.models import MovimientoStock, Repuesto
 from app.modules.usuarios.models import Usuario
 from app.core import security
 from app.core.mensajes_auth import NOMBRE_COOKIE_SESION
@@ -77,12 +78,17 @@ async def _insertar_orden(
     estado: str = "PENDIENTE",
     falla: str = "Falla",
     total: str = "0.00",
+    mecanico_id: int | None = None,
     items: list[tuple[int, int, str]] | None = None,
     historial: list[tuple[str | None, str, int | None]] | None = None,
 ) -> int:
     """Inserta una orden directamente (setup de pruebas de lectura) y devuelve su id."""
     orden = OrdenTrabajo(
-        vehiculo_id=vehiculo_id, estado=estado, falla=falla, total=Decimal(total)
+        vehiculo_id=vehiculo_id,
+        estado=estado,
+        falla=falla,
+        total=Decimal(total),
+        mecanico_id=mecanico_id,
     )
     sesion_db.add(orden)
     await sesion_db.flush()
@@ -749,3 +755,509 @@ async def test_rutas_heredan_control_cambio_pendiente_protegido(
     assert (await cliente_http.get("/ordenes/1")).status_code == 403
     assert (await cliente_http.get("/estados-orden")).status_code == 403
     assert (await cliente_http.get("/mis-ordenes")).status_code == 403
+    # Transiciones de C-08: heredan el control del grupo protegido.
+    assert (await cliente_http.post("/ordenes/1/iniciar")).status_code == 403
+    assert (await cliente_http.post("/ordenes/1/terminar")).status_code == 403
+    assert (await cliente_http.post("/ordenes/1/cancelar")).status_code == 403
+
+# -- POST /ordenes/{id}/iniciar (tasks 2.3, 2.4) -----------------------------
+
+
+async def test_iniciar_orden_mecanico_exitoso(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """MECANICO inicia PENDIENTE ? 200, EN_REPARACION, mecanico_id e historial."""
+    await insertar_catalogo(sesion_db)
+    mecanico = await autenticar_usuario(
+        cliente_http, sesion_db, "meca@taller.test", "MECANICO"
+    )
+    cliente = await crear_cliente(sesion_db, nombre="Ana", documento="1")
+    vehiculo = await crear_vehiculo(sesion_db, cliente_id=cliente.id, patente="INI111")
+    orden_id = await _insertar_orden(
+        sesion_db,
+        vehiculo_id=vehiculo.id,
+        estado="PENDIENTE",
+        historial=[(None, "PENDIENTE", mecanico.id)],
+    )
+
+    res = await cliente_http.post(f"/ordenes/{orden_id}/iniciar")
+
+    assert res.status_code == 200
+    datos = res.json()
+    assert datos["estado"] == "EN_REPARACION"
+    assert datos["mecanico_id"] == mecanico.id
+    assert datos["historial"][-1]["desde_estado"] == "PENDIENTE"
+    assert datos["historial"][-1]["hasta_estado"] == "EN_REPARACION"
+
+
+async def test_iniciar_orden_ya_en_reparacion_409(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """Orden ya EN_REPARACION ? 409 y no se agrega historial."""
+    await insertar_catalogo(sesion_db)
+    await autenticar_usuario(cliente_http, sesion_db, "meca@taller.test", "MECANICO")
+    cliente = await crear_cliente(sesion_db, nombre="Ana", documento="1")
+    vehiculo = await crear_vehiculo(sesion_db, cliente_id=cliente.id, patente="INI222")
+    orden_id = await _insertar_orden(
+        sesion_db,
+        vehiculo_id=vehiculo.id,
+        estado="EN_REPARACION",
+        historial=[(None, "PENDIENTE", None), ("PENDIENTE", "EN_REPARACION", None)],
+    )
+
+    res = await cliente_http.post(f"/ordenes/{orden_id}/iniciar")
+
+    assert res.status_code == 409
+    historial = await sesion_db.execute(
+        select(func.count())
+        .select_from(HistorialEstadoOrden)
+        .where(HistorialEstadoOrden.orden_id == orden_id)
+    )
+    assert int(historial.scalar_one()) == 2
+
+
+@pytest.mark.parametrize("rol", ["CLIENTE", "RECEPCION", "ADMIN"])
+async def test_iniciar_orden_sin_rol_mecanico_403(
+    cliente_http: AsyncClient, sesion_db: AsyncSession, rol: str
+) -> None:
+    """Un usuario sin rol MECANICO vigente ? 403 y el estado no cambia."""
+    await insertar_catalogo(sesion_db)
+    await autenticar_usuario(cliente_http, sesion_db, f"{rol.lower()}@taller.test", rol)
+    cliente = await crear_cliente(sesion_db, nombre="Ana", documento="1")
+    vehiculo = await crear_vehiculo(sesion_db, cliente_id=cliente.id, patente="INI333")
+    orden_id = await _insertar_orden(sesion_db, vehiculo_id=vehiculo.id)
+
+    res = await cliente_http.post(f"/ordenes/{orden_id}/iniciar")
+
+    assert res.status_code == 403
+    estado = await sesion_db.execute(
+        select(OrdenTrabajo.estado).where(OrdenTrabajo.id == orden_id)
+    )
+    assert estado.scalar_one() == "PENDIENTE"
+
+
+async def test_iniciar_orden_inexistente_404(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """Orden inexistente ? 404."""
+    await insertar_catalogo(sesion_db)
+    await autenticar_usuario(cliente_http, sesion_db, "meca@taller.test", "MECANICO")
+
+    res = await cliente_http.post("/ordenes/999999/iniciar")
+    assert res.status_code == 404
+
+
+async def test_iniciar_orden_sin_cookie_401(cliente_http: AsyncClient) -> None:
+    """Sin cookie ? 401."""
+    res = await cliente_http.post("/ordenes/1/iniciar")
+    assert res.status_code == 401
+
+
+# -- POST /ordenes/{id}/terminar (tasks 3.3, 3.4) ----------------------------
+
+
+async def _preparar_terminar(
+    sesion_db: AsyncSession,
+    *,
+    sufijo: str,
+    stock: int = 10,
+    cantidad: int = 2,
+) -> tuple[int, int]:
+    """Crea cliente/veh�culo/repuesto/orden EN_REPARACION; devuelve (orden, repuesto)."""
+    cliente = await crear_cliente(
+        sesion_db, nombre=f"Ana {sufijo}", documento=f"doc-{sufijo}"
+    )
+    vehiculo = await crear_vehiculo(
+        sesion_db, cliente_id=cliente.id, patente=f"TER{sufijo}"
+    )
+    repuesto = await crear_repuesto(
+        sesion_db, codigo=f"RT-{sufijo}", precio="100.00", stock=stock
+    )
+    orden_id = await _insertar_orden(
+        sesion_db,
+        vehiculo_id=vehiculo.id,
+        estado="EN_REPARACION",
+        items=[(repuesto.id, cantidad, "100.00")],
+        historial=[(None, "PENDIENTE", None), ("PENDIENTE", "EN_REPARACION", None)],
+    )
+    return orden_id, repuesto.id
+
+
+async def _stock_persistido(sesion_db: AsyncSession, repuesto_id: int) -> int:
+    valor = await sesion_db.execute(
+        select(Repuesto.stock).where(Repuesto.id == repuesto_id)
+    )
+    return int(valor.scalar_one())
+
+
+async def _movimientos_de(sesion_db: AsyncSession, orden_id: int) -> int:
+    valor = await sesion_db.execute(
+        select(func.count())
+        .select_from(MovimientoStock)
+        .where(MovimientoStock.orden_id == orden_id)
+    )
+    return int(valor.scalar_one())
+
+
+async def test_terminar_orden_mecanico_asignado_exitoso(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """Mec�nico asignado + stock suficiente ? 200, TERMINADA, stock y movimientos."""
+    await insertar_catalogo(sesion_db)
+    mecanico = await autenticar_usuario(
+        cliente_http, sesion_db, "meca@taller.test", "MECANICO"
+    )
+    orden_id, repuesto_id = await _preparar_terminar(sesion_db, sufijo="mec")
+    # Asigna el mec�nico autenticado a la orden EN_REPARACION
+    orden = await sesion_db.get(OrdenTrabajo, orden_id)
+    orden.mecanico_id = mecanico.id
+    await sesion_db.commit()
+
+    res = await cliente_http.post(f"/ordenes/{orden_id}/terminar")
+
+    assert res.status_code == 200
+    datos = res.json()
+    assert datos["estado"] == "TERMINADA"
+    assert datos["historial"][-1]["desde_estado"] == "EN_REPARACION"
+    assert datos["historial"][-1]["hasta_estado"] == "TERMINADA"
+    assert await _stock_persistido(sesion_db, repuesto_id) == 8
+    assert await _movimientos_de(sesion_db, orden_id) == 1
+
+
+async def test_terminar_orden_admin_ajena_exitoso(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """ADMIN no asignado termina la orden ? 200."""
+    await insertar_catalogo(sesion_db)
+    await autenticar_usuario(cliente_http, sesion_db, "admin@taller.test", "ADMIN")
+    orden_id, repuesto_id = await _preparar_terminar(sesion_db, sufijo="adm")
+
+    res = await cliente_http.post(f"/ordenes/{orden_id}/terminar")
+
+    assert res.status_code == 200
+    assert res.json()["estado"] == "TERMINADA"
+    assert await _stock_persistido(sesion_db, repuesto_id) == 8
+
+
+async def test_terminar_orden_stock_insuficiente_409_sin_escrituras(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """Stock insuficiente ? 409 sin cambios en stock, movimientos ni historial."""
+    await insertar_catalogo(sesion_db)
+    mecanico = await autenticar_usuario(
+        cliente_http, sesion_db, "meca@taller.test", "MECANICO"
+    )
+    orden_id, repuesto_id = await _preparar_terminar(
+        sesion_db, sufijo="ins", stock=1, cantidad=3
+    )
+    orden = await sesion_db.get(OrdenTrabajo, orden_id)
+    orden.mecanico_id = mecanico.id
+    await sesion_db.commit()
+
+    res = await cliente_http.post(f"/ordenes/{orden_id}/terminar")
+
+    assert res.status_code == 409
+    assert await _stock_persistido(sesion_db, repuesto_id) == 1
+    assert await _movimientos_de(sesion_db, orden_id) == 0
+    estado = await sesion_db.execute(
+        select(OrdenTrabajo.estado).where(OrdenTrabajo.id == orden_id)
+    )
+    assert estado.scalar_one() == "EN_REPARACION"
+    historial = await sesion_db.execute(
+        select(func.count())
+        .select_from(HistorialEstadoOrden)
+        .where(HistorialEstadoOrden.orden_id == orden_id)
+    )
+    assert int(historial.scalar_one()) == 2
+
+
+async def test_terminar_orden_ajena_403(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """MECANICO no asignado y sin ADMIN ? 403 (antes que el estado)."""
+    await insertar_catalogo(sesion_db)
+    mecanico = await autenticar_usuario(
+        cliente_http, sesion_db, "meca@taller.test", "MECANICO"
+    )
+    await autenticar_usuario(
+        cliente_http, sesion_db, "otro@taller.test", "MECANICO"
+    )
+    orden_id, _ = await _preparar_terminar(sesion_db, sufijo="aje")
+    orden = await sesion_db.get(OrdenTrabajo, orden_id)
+    orden.mecanico_id = mecanico.id
+    await sesion_db.commit()
+
+    # La cookie vigente es la del �ltimo usuario autenticado ("otro").
+    res = await cliente_http.post(f"/ordenes/{orden_id}/terminar")
+
+    assert res.status_code == 403
+    estado = await sesion_db.execute(
+        select(OrdenTrabajo.estado).where(OrdenTrabajo.id == orden_id)
+    )
+    assert estado.scalar_one() == "EN_REPARACION"
+
+
+async def test_terminar_orden_ya_terminada_409(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """Orden ya TERMINADA (con mec�nico asignado) ? 409."""
+    await insertar_catalogo(sesion_db)
+    mecanico = await autenticar_usuario(
+        cliente_http, sesion_db, "meca@taller.test", "MECANICO"
+    )
+    cliente = await crear_cliente(sesion_db, nombre="Ana", documento="1")
+    vehiculo = await crear_vehiculo(sesion_db, cliente_id=cliente.id, patente="TERFIN")
+    orden_id = await _insertar_orden(
+        sesion_db,
+        vehiculo_id=vehiculo.id,
+        estado="TERMINADA",
+        mecanico_id=mecanico.id,
+    )
+
+    res = await cliente_http.post(f"/ordenes/{orden_id}/terminar")
+    assert res.status_code == 409
+
+
+async def test_terminar_orden_inexistente_404(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """Orden inexistente ? 404."""
+    await insertar_catalogo(sesion_db)
+    await autenticar_usuario(cliente_http, sesion_db, "admin@taller.test", "ADMIN")
+
+    res = await cliente_http.post("/ordenes/999999/terminar")
+    assert res.status_code == 404
+
+
+async def test_terminar_orden_sin_cookie_401(cliente_http: AsyncClient) -> None:
+    """Sin cookie ? 401."""
+    res = await cliente_http.post("/ordenes/1/terminar")
+    assert res.status_code == 401
+
+
+# -- POST /ordenes/{id}/cancelar (tasks 4.3, 4.4) ----------------------------
+
+
+async def test_cancelar_orden_recepcion_exitoso(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """RECEPCION cancela PENDIENTE ? 200 y CANCELADA con historial."""
+    await insertar_catalogo(sesion_db)
+    await autenticar_usuario(cliente_http, sesion_db, "recepcion@taller.test", "RECEPCION")
+    cliente = await crear_cliente(sesion_db, nombre="Ana", documento="1")
+    vehiculo = await crear_vehiculo(sesion_db, cliente_id=cliente.id, patente="CAN111")
+    orden_id = await _insertar_orden(
+        sesion_db,
+        vehiculo_id=vehiculo.id,
+        historial=[(None, "PENDIENTE", None)],
+    )
+
+    res = await cliente_http.post(f"/ordenes/{orden_id}/cancelar")
+
+    assert res.status_code == 200
+    datos = res.json()
+    assert datos["estado"] == "CANCELADA"
+    assert datos["historial"][-1]["desde_estado"] == "PENDIENTE"
+    assert datos["historial"][-1]["hasta_estado"] == "CANCELADA"
+
+
+async def test_cancelar_orden_duenio_exitoso(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """El due�o del veh�culo cancela su orden PENDIENTE ? 200."""
+    await insertar_catalogo(sesion_db)
+    duenio = await autenticar_usuario(
+        cliente_http, sesion_db, "duenio@taller.test", "CLIENTE"
+    )
+    cliente = await crear_cliente(
+        sesion_db, nombre="Due�o", documento="2", usuario_id=duenio.id
+    )
+    vehiculo = await crear_vehiculo(sesion_db, cliente_id=cliente.id, patente="CAN222")
+    orden_id = await _insertar_orden(
+        sesion_db,
+        vehiculo_id=vehiculo.id,
+        historial=[(None, "PENDIENTE", None)],
+    )
+
+    res = await cliente_http.post(f"/ordenes/{orden_id}/cancelar")
+    assert res.status_code == 200
+    assert res.json()["estado"] == "CANCELADA"
+
+
+async def test_cancelar_orden_ajena_403_no_409(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """Usuario ajeno sobre PENDIENTE ? 403 (no 409) y no cambia el estado."""
+    await insertar_catalogo(sesion_db)
+    await autenticar_usuario(cliente_http, sesion_db, "ajeno@taller.test", "CLIENTE")
+    cliente = await crear_cliente(sesion_db, nombre="Ana", documento="1")
+    vehiculo = await crear_vehiculo(sesion_db, cliente_id=cliente.id, patente="CAN333")
+    orden_id = await _insertar_orden(sesion_db, vehiculo_id=vehiculo.id)
+
+    res = await cliente_http.post(f"/ordenes/{orden_id}/cancelar")
+
+    assert res.status_code == 403
+    estado = await sesion_db.execute(
+        select(OrdenTrabajo.estado).where(OrdenTrabajo.id == orden_id)
+    )
+    assert estado.scalar_one() == "PENDIENTE"
+
+
+async def test_cancelar_orden_terminada_409(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """Con relaci�n v�lida pero orden TERMINADA ? 409."""
+    await insertar_catalogo(sesion_db)
+    await autenticar_usuario(cliente_http, sesion_db, "recepcion@taller.test", "RECEPCION")
+    cliente = await crear_cliente(sesion_db, nombre="Ana", documento="1")
+    vehiculo = await crear_vehiculo(sesion_db, cliente_id=cliente.id, patente="CAN444")
+    orden_id = await _insertar_orden(
+        sesion_db, vehiculo_id=vehiculo.id, estado="TERMINADA"
+    )
+
+    res = await cliente_http.post(f"/ordenes/{orden_id}/cancelar")
+    assert res.status_code == 409
+
+
+async def test_cancelar_orden_inexistente_404(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """Orden inexistente ? 404."""
+    await insertar_catalogo(sesion_db)
+    await autenticar_usuario(cliente_http, sesion_db, "recepcion@taller.test", "RECEPCION")
+
+    res = await cliente_http.post("/ordenes/999999/cancelar")
+    assert res.status_code == 404
+
+
+async def test_cancelar_orden_sin_cookie_401(cliente_http: AsyncClient) -> None:
+    """Sin cookie ? 401."""
+    res = await cliente_http.post("/ordenes/1/cancelar")
+    assert res.status_code == 401
+
+
+# -- DELETE /vehiculos/{id} con �rdenes abiertas (task 5.1, RN-16) -----------
+
+
+async def _vehiculo_con_orden(
+    sesion_db: AsyncSession, *, sufijo: str, estado: str | None
+) -> tuple[int, int]:
+    """Crea veh�culo (y orden opcional) y devuelve (vehiculo_id, orden_id|0)."""
+    cliente = await crear_cliente(
+        sesion_db, nombre=f"Ana {sufijo}", documento=f"doc-baja-{sufijo}"
+    )
+    vehiculo = await crear_vehiculo(
+        sesion_db, cliente_id=cliente.id, patente=f"BAJ{sufijo}"
+    )
+    orden_id = 0
+    if estado is not None:
+        orden_id = await _insertar_orden(
+            sesion_db, vehiculo_id=vehiculo.id, estado=estado
+        )
+    return vehiculo.id, orden_id
+
+
+@pytest.mark.parametrize("estado", ["PENDIENTE", "EN_REPARACION"])
+async def test_baja_vehiculo_con_ordenes_abiertas_409(
+    cliente_http: AsyncClient, sesion_db: AsyncSession, estado: str
+) -> None:
+    """Veh�culo con orden no final ? 409 y sigue vigente (RN-16)."""
+    await insertar_catalogo(sesion_db)
+    await autenticar_usuario(cliente_http, sesion_db, "recepcion@taller.test", "RECEPCION")
+    vehiculo_id, _ = await _vehiculo_con_orden(
+        sesion_db, sufijo=estado[:3], estado=estado
+    )
+
+    res = await cliente_http.delete(f"/vehiculos/{vehiculo_id}")
+
+    assert res.status_code == 409
+    from app.modules.clientes.models import Vehiculo
+
+    borrado = await sesion_db.execute(
+        select(Vehiculo.borrado_en).where(Vehiculo.id == vehiculo_id)
+    )
+    assert borrado.scalar_one() is None
+
+
+@pytest.mark.parametrize("estado", [None, "TERMINADA", "CANCELADA"])
+async def test_baja_vehiculo_sin_ordenes_abiertas_204(
+    cliente_http: AsyncClient, sesion_db: AsyncSession, estado: str | None
+) -> None:
+    """Sin �rdenes o solo finales ? 204 con `borrado_en` seteado (RN-16)."""
+    await insertar_catalogo(sesion_db)
+    await autenticar_usuario(cliente_http, sesion_db, "recepcion@taller.test", "RECEPCION")
+    sufijo = (estado or "sin")[:3]
+    vehiculo_id, _ = await _vehiculo_con_orden(
+        sesion_db, sufijo=sufijo, estado=estado
+    )
+
+    res = await cliente_http.delete(f"/vehiculos/{vehiculo_id}")
+
+    assert res.status_code == 204
+    from app.modules.clientes.models import Vehiculo
+
+    borrado = await sesion_db.execute(
+        select(Vehiculo.borrado_en).where(Vehiculo.id == vehiculo_id)
+    )
+    assert borrado.scalar_one() is not None
+
+
+async def test_baja_vehiculo_inexistente_404(
+    cliente_http: AsyncClient, sesion_db: AsyncSession
+) -> None:
+    """Veh�culo inexistente ? 404."""
+    await insertar_catalogo(sesion_db)
+    await autenticar_usuario(cliente_http, sesion_db, "recepcion@taller.test", "RECEPCION")
+
+    res = await cliente_http.delete("/vehiculos/999999")
+    assert res.status_code == 404
+
+
+async def test_terminar_notifica_solo_tras_commit(
+    cliente_http: AsyncClient, sesion_db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """La notificación se encola solo si la transacción confirmó (D6, task 3.5)."""
+    from app.modules.ordenes import router as router_ordenes_modulo
+
+    llamadas: list[int] = []
+
+    async def _notificacion_falsa(orden_id: int) -> None:
+        llamadas.append(orden_id)
+
+    monkeypatch.setattr(
+        router_ordenes_modulo, "notificar_orden_terminada", _notificacion_falsa
+    )
+    await insertar_catalogo(sesion_db)
+    await autenticar_usuario(cliente_http, sesion_db, "admin@taller.test", "ADMIN")
+    orden_id, _ = await _preparar_terminar(sesion_db, sufijo="not")
+
+    res = await cliente_http.post(f"/ordenes/{orden_id}/terminar")
+
+    assert res.status_code == 200
+    assert llamadas == [orden_id]
+
+
+async def test_terminar_con_409_no_notifica(
+    cliente_http: AsyncClient, sesion_db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Con rollback por stock insuficiente no se ejecuta la notificación (D6)."""
+    from app.modules.ordenes import router as router_ordenes_modulo
+
+    llamadas: list[int] = []
+
+    async def _notificacion_falsa(orden_id: int) -> None:
+        llamadas.append(orden_id)
+
+    monkeypatch.setattr(
+        router_ordenes_modulo, "notificar_orden_terminada", _notificacion_falsa
+    )
+    await insertar_catalogo(sesion_db)
+    await autenticar_usuario(cliente_http, sesion_db, "admin@taller.test", "ADMIN")
+    orden_id, _ = await _preparar_terminar(
+        sesion_db, sufijo="not2", stock=0, cantidad=5
+    )
+
+    res = await cliente_http.post(f"/ordenes/{orden_id}/terminar")
+
+    assert res.status_code == 409
+    assert llamadas == []

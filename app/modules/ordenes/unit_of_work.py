@@ -1,9 +1,9 @@
 """UoW del módulo órdenes: una operación de negocio = una transacción (D10).
 
-Expone `ordenes`, `items`, `historial`, `estados` (sólo lectura) y reutiliza
-`vehiculos` (clientes) y `repuestos` (repuestos) para las validaciones de
-referencia. Ningún repositorio llama a `commit()`: sólo `flush`; la
-confirmación es del Unit of Work al salir del bloque.
+Expone `ordenes`, `items`, `historial`, `estados` (sólo lectura), `repuestos` y
+`movimientos` (salidas de stock de C-08) y reutiliza `vehiculos` (clientes) para
+las validaciones de referencia. Ningún repositorio llama a `commit()`: sólo
+`flush`; la confirmación es del Unit of Work al salir del bloque.
 """
 
 from __future__ import annotations
@@ -18,7 +18,10 @@ from app.modules.ordenes.repository import (
     RepositorioItemsOrden,
     RepositorioOrdenes,
 )
-from app.modules.repuestos.repository import RepositorioRepuestos
+from app.modules.repuestos.repository import (
+    RepositorioMovimientosStock,
+    RepositorioRepuestos,
+)
 
 
 class UoWOrdenes(UnitOfWork):
@@ -37,4 +40,7 @@ class UoWOrdenes(UnitOfWork):
         self.estados: RepositorioEstadosOrden = RepositorioEstadosOrden(session)
         self.vehiculos: RepositorioVehiculos = RepositorioVehiculos(session)
         self.repuestos: RepositorioRepuestos = RepositorioRepuestos(session)
+        self.movimientos: RepositorioMovimientosStock = RepositorioMovimientosStock(
+            session
+        )
         self.clientes: RepositorioClientes = RepositorioClientes(session)

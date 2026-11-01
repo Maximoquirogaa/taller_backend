@@ -6,13 +6,19 @@ Rutas:
 - `GET /ordenes/{id}` — detalle (staff ve cualquiera; CLIENTE solo la suya).
 - `GET /estados-orden` — catálogo de estados (cualquier autenticado).
 - `GET /mis-ordenes` — órdenes propias paginadas (cualquier autenticado).
+- `POST /ordenes/{id}/iniciar` — PENDIENTE → EN_REPARACION (solo MECANICO).
+- `POST /ordenes/{id}/terminar` — EN_REPARACION → TERMINADA con descuento de
+  stock y notificación post-commit (mecánico asignado o ADMIN).
+- `POST /ordenes/{id}/cancelar` — PENDIENTE → CANCELADA (personal o dueño).
 """
 
 from __future__ import annotations
 
+import asyncio
+from logging import getLogger
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +42,8 @@ from app.modules.ordenes.unit_of_work import UoWOrdenes
 
 router_ordenes = APIRouter(tags=["ordenes"])
 
+logger = getLogger("uvicorn.error")
+
 ROLES_APERTURA = ("RECEPCION", "ADMIN")
 ROLES_LISTA = ("ADMIN", "RECEPCION", "MECANICO")
 
@@ -50,6 +58,7 @@ def _detalle_a_salida(orden) -> SalidaOrdenDetalle:
     return SalidaOrdenDetalle(
         id=orden.id,
         estado=orden.estado,
+        mecanico_id=orden.mecanico_id,
         falla=orden.falla,
         creada_en=orden.creada_en,
         total=orden.total,
@@ -230,3 +239,133 @@ async def mis_ordenes(
         size=pagina.size,
         pages=pagina.pages,
     )
+
+# -- Transiciones de estado (C-08, US-026/027/028) ---------------------------
+
+
+async def notificar_orden_terminada(orden_id: int) -> None:
+    """Notificación post-commit de una orden terminada (D6).
+
+    Se registra en `BackgroundTasks` recién después de que el UoW confirmó, de
+    modo que nunca se anuncia una transición que no llegó a persistirse.
+    """
+    await asyncio.sleep(0.5)
+    logger.info("Notificación: la orden de trabajo %s fue terminada.", orden_id)
+
+
+@router_ordenes.post(
+    "/ordenes/{orden_id}/iniciar",
+    response_model=SalidaOrdenDetalle,
+    dependencies=[Depends(requiere_rol("MECANICO"))],
+)
+async def iniciar_orden_endpoint(
+    orden_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    usuario: Annotated[UsuarioAutenticado, Depends(usuario_actual)],
+) -> SalidaOrdenDetalle:
+    """Inicia la reparación de una orden PENDIENTE (US-026, RN-11).
+
+    Solo MECANICO vigente. PENDIENTE ? EN_REPARACION con `mecanico_id` y
+    historial; cualquier otro estado ? 409; inexistente ? 404.
+    """
+    try:
+        orden = await servicio_ordenes.iniciar_orden(
+            UoWOrdenes(session), orden_id, usuario.id
+        )
+    except servicio_ordenes.OrdenNoEncontrada as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except servicio_ordenes.TransicionInvalida as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflicto de integridad al iniciar la orden: verifique los datos.",
+        ) from exc
+    return _detalle_a_salida(orden)
+
+
+@router_ordenes.post(
+    "/ordenes/{orden_id}/terminar",
+    response_model=SalidaOrdenDetalle,
+)
+async def terminar_orden_endpoint(
+    orden_id: int,
+    tareas_fondo: BackgroundTasks,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    usuario: Annotated[UsuarioAutenticado, Depends(usuario_actual)],
+) -> SalidaOrdenDetalle:
+    """Termina la reparación descontando stock en una sola transacción (US-027, RN-13/RN-14).
+
+    Permiso: mecánico asignado o ADMIN (403 antes que estado). EN_REPARACION ?
+    TERMINADA con movimientos de salida e historial; stock insuficiente ? 409
+    sin escrituras parciales. La notificación se encola solo tras el commit (D6).
+    """
+    try:
+        orden = await servicio_ordenes.terminar_orden(
+            UoWOrdenes(session), orden_id, usuario
+        )
+    except servicio_ordenes.OrdenNoEncontrada as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except servicio_ordenes.OrdenAjena as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        ) from exc
+    except servicio_ordenes.StockInsuficiente as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    except servicio_ordenes.TransicionInvalida as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflicto de integridad al terminar la orden: verifique los datos.",
+        ) from exc
+    tareas_fondo.add_task(notificar_orden_terminada, orden.id)
+    return _detalle_a_salida(orden)
+
+
+@router_ordenes.post(
+    "/ordenes/{orden_id}/cancelar",
+    response_model=SalidaOrdenDetalle,
+)
+async def cancelar_orden_endpoint(
+    orden_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    usuario: Annotated[UsuarioAutenticado, Depends(usuario_actual)],
+) -> SalidaOrdenDetalle:
+    """Cancela una orden PENDIENTE (US-028, RN-12).
+
+    Sin `requiere_rol`: el servicio evalúa primero la relación (personal del
+    taller o dueño del vehículo ? 403) y después el estado PENDIENTE (409).
+    """
+    try:
+        orden = await servicio_ordenes.cancelar_orden(
+            UoWOrdenes(session), orden_id, usuario
+        )
+    except servicio_ordenes.OrdenNoEncontrada as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except servicio_ordenes.OrdenAjena as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        ) from exc
+    except servicio_ordenes.TransicionInvalida as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflicto de integridad al cancelar la orden: verifique los datos.",
+        ) from exc
+    return _detalle_a_salida(orden)

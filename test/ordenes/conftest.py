@@ -88,10 +88,22 @@ async def sesion_db(
 
 
 async def insertar_catalogo(sesion_db: AsyncSession) -> None:
-    """Inserta el catálogo canónico de estados y confirma."""
+    """Inserta el catálogo canónico de estados y confirma.
+
+    Es idempotente: si un código ya existe se omite, para que los helpers de
+    prueba puedan invocarlo varias veces dentro de un mismo test (la fixture
+    `sesion_db` trunca una sola vez por test).
+    """
+    from sqlalchemy import select
+
     from app.modules.ordenes.models import EstadoOrden  # import local: existe tras la migración
 
+    existentes = set(
+        (await sesion_db.execute(select(EstadoOrden.codigo))).scalars().all()
+    )
     for codigo, descripcion, posicion, es_final in CATALOGO_ESTADOS:
+        if codigo in existentes:
+            continue
         sesion_db.add(
             EstadoOrden(
                 codigo=codigo,

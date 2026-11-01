@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.clientes.models import Cliente, Vehiculo
@@ -46,33 +46,32 @@ class VehiculoConOrdenesAbiertas(Exception):
 
 
 async def verificar_ordenes_abiertas(session: AsyncSession, vehiculo_id: int) -> bool:
-    """Verifica si el vehículo tiene órdenes no finales (punto de extensión de RN-16).
+    """Indica si el vehículo tiene órdenes en un estado no final (RN-16).
 
-    En C-04, la tabla `orden_trabajo` aún no existe (se crea en C-07). Si la tabla
-    no existe o está vacía, retorna False de forma segura. En C-08 se integra
-    completamente con el catálogo de estados y la columna `es_final`.
+    Consulta las órdenes del vehículo unidas al catálogo `estado_orden` y
+    considera "abierta" toda orden cuyo estado tenga `es_final = False`. Se
+    apoya en el catálogo y no en una lista de códigos hardcodeada, así agregar
+    estados nuevos no exige tocar la baja de vehículos.
+
+    Args:
+        session: sesión de la petición (dueña de la transacción del UoW).
+        vehiculo_id: identificador del vehículo a dar de baja.
+
+    Returns:
+        `True` si existe al menos una orden no final para el vehículo.
     """
-    try:
-        consulta = text(
-            "SELECT 1 FROM information_schema.tables WHERE table_name = 'orden_trabajo'"
-        )
-        res = await session.execute(consulta)
-        if res.scalar() is None:
-            return False
+    from app.modules.ordenes.models import EstadoOrden, OrdenTrabajo
 
-        # Si la tabla existe, consulta si hay órdenes activas
-        consulta_ordenes = text(
-            """
-            SELECT 1 FROM orden_trabajo o
-            JOIN estado_orden e ON o.estado = e.codigo
-            WHERE o.vehiculo_id = :v_id AND e.es_final = FALSE
-            LIMIT 1
-            """
+    consulta = (
+        select(OrdenTrabajo.id)
+        .join(EstadoOrden, OrdenTrabajo.estado == EstadoOrden.codigo)
+        .where(
+            OrdenTrabajo.vehiculo_id == vehiculo_id,
+            EstadoOrden.es_final.is_(False),
         )
-        res_ordenes = await session.execute(consulta_ordenes, {"v_id": vehiculo_id})
-        return res_ordenes.scalar() is not None
-    except Exception:
-        return False
+        .limit(1)
+    )
+    return (await session.execute(consulta)).scalar() is not None
 
 
 async def crear_cliente(uow: UoWClientes, datos: EntradaCrearCliente) -> Cliente:

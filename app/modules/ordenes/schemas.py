@@ -144,6 +144,7 @@ class SalidaOrdenDetalle(BaseModel):
 
     id: int
     estado: str
+    mecanico_id: int | None = None
     falla: str
     creada_en: datetime
     total: Decimal
